@@ -54,7 +54,7 @@ export default function AuthGate() {
     }
 
     setIsRedirecting(true);
-    window.location.replace("/upload");
+    window.location.replace("/");
   }, [isLoading, isRedirecting, status.authenticated]);
 
   useEffect(() => {

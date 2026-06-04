@@ -8,7 +8,6 @@ import { useDispatch } from 'react-redux';
 import { checkIfSelectedOllamaModelIsPulled } from '@/utils/providerUtils';
 import { LLMConfig } from '@/types/llm_config';
 import { getApiUrl } from '@/utils/api';
-import { isAuthDisabled } from '@/utils/auth';
 
 export function ConfigurationInitializer({ children }: { children: React.ReactNode }) {
   const dispatch = useDispatch();
@@ -80,17 +79,6 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
       llmConfig = normalizeLLMConfig(llmConfig);
 
       dispatch(setLLMConfig(llmConfig));
-
-      if (isAuthDisabled()) {
-        if (route === '/') {
-          router.replace('/upload');
-          setLoadingToFalseAfterNavigatingTo('/upload');
-          return;
-        }
-
-        setIsLoading(false);
-        return;
-      }
 
       const isValid = hasValidLLMConfig(llmConfig);
       if (route.startsWith('/pdf-maker')) {
