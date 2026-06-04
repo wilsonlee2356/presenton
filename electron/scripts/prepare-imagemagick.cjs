@@ -142,14 +142,28 @@ function archiveName() {
   return `ImageMagick-${VERSION}-portable-Q16-${archName}.7z`;
 }
 
-function linuxAppImageName() {
+function linuxAppImageArch() {
   if (PLATFORM !== "linux") {
     return null;
   }
   if (ARCH !== "x64") {
     fail(`No bundled ImageMagick Linux AppImage asset configured for ${PLATFORM}-${ARCH}`);
   }
-  return `ImageMagick-${VERSION}-gcc-x86_64.AppImage`;
+  return "x86_64";
+}
+
+function linuxDefaultAppImageName() {
+  return `ImageMagick-${VERSION}-gcc-${linuxAppImageArch()}.AppImage`;
+}
+
+function parseAssetNameFromUrl(urlValue) {
+  try {
+    const pathname = new URL(urlValue).pathname;
+    const name = pathname.split("/").filter(Boolean).pop();
+    return name || null;
+  } catch {
+    return null;
+  }
 }
 
 function downloadUrl(assetName) {
@@ -189,6 +203,97 @@ function downloadFile(url, destination) {
     );
     request.on("error", reject);
   });
+}
+
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(
+      url,
+      {
+        headers: {
+          "User-Agent": "Presenton ImageMagick runtime fetcher",
+          Accept: "application/vnd.github+json",
+        },
+      },
+      (response) => {
+        if ([301, 302, 303, 307, 308].includes(response.statusCode || 0)) {
+          const location = response.headers.location;
+          if (!location) {
+            reject(new Error(`Redirect from ${url} did not include Location`));
+            return;
+          }
+          response.resume();
+          fetchJson(new URL(location, url).toString()).then(resolve, reject);
+          return;
+        }
+        if (response.statusCode !== 200) {
+          reject(new Error(`Request failed with HTTP ${response.statusCode}: ${url}`));
+          response.resume();
+          return;
+        }
+
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          try {
+            const body = Buffer.concat(chunks).toString("utf8");
+            resolve(JSON.parse(body));
+          } catch (error) {
+            reject(error);
+          }
+        });
+        response.on("error", reject);
+      },
+    );
+    request.on("error", reject);
+  });
+}
+
+function uniqueNonEmpty(values) {
+  return values.filter(Boolean).filter((value, index, all) => all.indexOf(value) === index);
+}
+
+async function linuxAppImageCandidates() {
+  const configuredAsset = process.env.IMAGEMAGICK_LINUX_ASSET_NAME?.trim();
+  if (configuredAsset) {
+    return [configuredAsset];
+  }
+
+  const arch = linuxAppImageArch();
+  const downloadOverride = process.env.IMAGEMAGICK_DOWNLOAD_URL?.trim();
+  if (downloadOverride) {
+    return [parseAssetNameFromUrl(downloadOverride) || linuxDefaultAppImageName()];
+  }
+
+  const fallbackName = linuxDefaultAppImageName();
+  const candidates = [fallbackName];
+  try {
+    const release = await fetchJson(`https://api.github.com/repos/ImageMagick/ImageMagick/releases/tags/${VERSION}`);
+    const assets = Array.isArray(release?.assets) ? release.assets : [];
+    const appImages = assets
+      .map((asset) => asset?.name)
+      .filter((name) => typeof name === "string" && name.endsWith(`-${arch}.AppImage`));
+
+    const scored = appImages
+      .map((name) => ({
+        name,
+        score: name === fallbackName
+          ? 100
+          : name.includes(`-gcc-${arch}.AppImage`)
+            ? 90
+            : name.includes(`-clang-${arch}.AppImage`)
+              ? 80
+              : 70,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => entry.name);
+
+    candidates.push(...scored);
+  } catch (error) {
+    log(`Could not resolve Linux AppImage assets from release metadata: ${error?.message || error}`);
+  }
+
+  return uniqueNonEmpty(candidates);
 }
 
 function findMagickDir(root) {
@@ -255,16 +360,42 @@ async function prepareWindows() {
 }
 
 async function prepareLinux() {
-  const assetName = linuxAppImageName();
-  const appImagePath = path.join(CACHE_DIR, assetName);
+  const candidates = await linuxAppImageCandidates();
   const tempTarget = `${TARGET_DIR}.tmp`;
+  let assetName = null;
+  let appImagePath = null;
+  let lastDownloadError = null;
 
-  if (!fs.existsSync(appImagePath)) {
-    const url = downloadUrl(assetName);
+  for (const candidate of candidates) {
+    const candidatePath = path.join(CACHE_DIR, candidate);
+    if (fs.existsSync(candidatePath)) {
+      log(`Using cached AppImage: ${candidatePath}`);
+      assetName = candidate;
+      appImagePath = candidatePath;
+      break;
+    }
+
+    const url = downloadUrl(candidate);
     log(`Downloading ${url}`);
-    await downloadFile(url, appImagePath);
-  } else {
-    log(`Using cached AppImage: ${appImagePath}`);
+    try {
+      await downloadFile(url, candidatePath);
+      assetName = candidate;
+      appImagePath = candidatePath;
+      break;
+    } catch (error) {
+      lastDownloadError = error;
+      const message = String(error?.message || error);
+      if (message.includes("HTTP 404")) {
+        log(`ImageMagick asset not found (${candidate}); trying next candidate.`);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (!assetName || !appImagePath) {
+    const reason = lastDownloadError?.message || lastDownloadError || "no candidate succeeded";
+    fail(`Could not fetch Linux ImageMagick AppImage: ${reason}`);
   }
 
   fs.rmSync(tempTarget, { recursive: true, force: true });
