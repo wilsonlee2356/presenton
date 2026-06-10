@@ -243,6 +243,21 @@ def test_font_stylesheet_links_for_slide_html_extracts_tailwind_font_classes():
     assert links.count('rel="stylesheet"') == 2
 
 
+def test_font_stylesheet_links_skip_embedded_and_uploaded_fonts():
+    links = fonts_and_slides_preview._font_stylesheet_links_for_slide_html(
+        "<span class=\"font-['Poppins']\"></span>"
+        "<span class=\"font-['Snell_Roundhand']\"></span>"
+        "<span class=\"font-['DM_Sans']\"></span>",
+        "@font-face { font-family: 'Poppins'; src: url(data:font/ttf;base64,AA); }"
+        '@font-face { font-family: "Snell Roundhand"; src: url(data:font/ttf;base64,AA); }',
+    )
+
+    assert "family=Poppins" not in links
+    assert "family=Snell+Roundhand" not in links
+    assert "family=DM+Sans:wght@400;700" in links
+    assert links.count('rel="stylesheet"') == 1
+
+
 def test_font_face_css_for_local_fonts_includes_family_and_full_names(
     monkeypatch,
     tmp_path,
@@ -347,9 +362,9 @@ async def test_create_slide_previews_from_html_uses_converter_dimensions_and_fon
                 height=768.0,
             )
 
-        async def render_html_to_image(self, html, width, height):
-            render_calls.append((html, width, height))
-            return SimpleNamespace(path=str(rendered_path))
+        async def render_htmls_to_images(self, htmls, width, height):
+            render_calls.append((htmls, width, height))
+            return SimpleNamespace(paths=[str(rendered_path)])
 
     monkeypatch.setattr(
         fonts_and_slides_preview,
@@ -366,11 +381,62 @@ async def test_create_slide_previews_from_html_uses_converter_dimensions_and_fon
 
     assert result == [str(rendered_path)]
     assert len(render_calls) == 1
-    html, width, height = render_calls[0]
+    htmls, width, height = render_calls[0]
     assert width == 1024
     assert height == 768
+    assert len(htmls) == 1
+    html = htmls[0]
     assert ".deck-font { color: black; }" in html
     assert 'font-family: "Khand Bold";' in html
+
+
+@pytest.mark.anyio
+async def test_create_slide_previews_from_html_batches_slides_in_one_task(
+    monkeypatch,
+    tmp_path,
+):
+    output_paths = [tmp_path / "slide-1.png", tmp_path / "slide-2.png"]
+    for output_path in output_paths:
+        output_path.write_bytes(b"png")
+    render_calls = []
+
+    class FakeExportTaskService:
+        async def convert_pptx_to_html(self, pptx_path, get_fonts=False):
+            return SimpleNamespace(
+                slides=[
+                    '<div class="slide-content">One</div>',
+                    '<div class="slide-content">Two</div>',
+                ],
+                font_css="",
+                width=320.0,
+                height=180.0,
+            )
+
+        async def render_htmls_to_images(self, htmls, width, height):
+            render_calls.append((htmls, width, height))
+            return SimpleNamespace(paths=[str(path) for path in output_paths])
+
+    monkeypatch.setattr(
+        fonts_and_slides_preview,
+        "EXPORT_TASK_SERVICE",
+        FakeExportTaskService(),
+    )
+
+    result = await fonts_and_slides_preview.render_pptx_slides_to_images(
+        modified_pptx_path="deck.pptx",
+        font_paths_for_install=[],
+        max_slides=None,
+        logger=DummyLogger(),
+    )
+
+    assert len(render_calls) == 1
+    htmls, width, height = render_calls[0]
+    assert width == 320
+    assert height == 180
+    assert len(htmls) == 2
+    assert "One" in htmls[0]
+    assert "Two" in htmls[1]
+    assert result == [str(path) for path in output_paths]
 
 
 @pytest.mark.anyio

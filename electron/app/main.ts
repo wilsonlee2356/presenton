@@ -10,6 +10,7 @@ import {
   ensureDirectoriesExist,
   fastapiDir,
   getAppDataDir,
+  getCacheDir,
   getTempDir,
   getUserConfigPath,
   initializeAppPaths,
@@ -44,6 +45,7 @@ import {
   prepareChromiumCacheRecovery,
   type ChromiumCacheRecoveryStatus,
 } from "./utils/chromium-cache-recovery";
+import { resolveLaunchableExportChromiumPath } from "./utils/export-chromium";
 
 installSafeConsole();
 
@@ -308,6 +310,20 @@ async function startServers(fastApiPort: number, nextjsPort: number) {
     const imageMagickRuntime = resolveImageMagickRuntime();
     const exportPackageRoot = path.join(baseDir, "resources", "export");
     const exportConverterPath = resolveExportConverterPath(baseDir);
+    const exportChromiumPath = await resolveLaunchableExportChromiumPath();
+    const puppeteerCacheDir = path.join(getCacheDir(), "puppeteer");
+    const puppeteerTempDir = path.join(tempDir, "puppeteer");
+    await Promise.all([
+      fs.promises.mkdir(puppeteerCacheDir, { recursive: true }),
+      fs.promises.mkdir(puppeteerTempDir, { recursive: true }),
+    ]);
+    if (exportChromiumPath) {
+      safeLog("[Presenton] Export Chromium runtime resolved:", exportChromiumPath);
+    } else {
+      safeWarn(
+        "[Presenton] Export Chromium runtime was not found; Template Studio slide previews will fail until Chromium is installed."
+      );
+    }
     if (imageMagickRuntime) {
       safeLog("[Presenton] ImageMagick runtime resolved:", {
         source: imageMagickRuntime.source,
@@ -378,6 +394,11 @@ async function startServers(fastApiPort: number, nextjsPort: number) {
         ELECTRON_RUN_AS_NODE: "1",
         EXPORT_PACKAGE_ROOT: exportPackageRoot,
         EXPORT_RUNTIME_DIR: exportPackageRoot,
+        PUPPETEER_CACHE_DIR: puppeteerCacheDir,
+        PUPPETEER_TMP_DIR: puppeteerTempDir,
+        ...(exportChromiumPath && {
+          PUPPETEER_EXECUTABLE_PATH: exportChromiumPath,
+        }),
         ...(exportConverterPath && {
           BUILT_PYTHON_MODULE_PATH: exportConverterPath,
         }),

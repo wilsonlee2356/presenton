@@ -211,12 +211,28 @@ def _localize_preview_asset_urls(html: str) -> str:
     )
 
 
-def _font_stylesheet_links_for_slide_html(slide_html: str) -> str:
+def _normalized_css_font_family(value: str) -> str:
+    return " ".join(value.replace("_", " ").split()).casefold()
+
+
+def _font_stylesheet_links_for_slide_html(
+    slide_html: str, declared_font_css: str = ""
+) -> str:
+    declared_font_names = {
+        _normalized_css_font_family(font_name)
+        for font_name in re.findall(
+            r"font-family\s*:\s*['\"]?([^;'\"}]+)",
+            declared_font_css,
+            flags=re.IGNORECASE,
+        )
+        if font_name.strip()
+    }
     font_names = sorted(
         {
             font_name.replace("_", " ").strip()
             for font_name in re.findall(r"font-\[\s*['\"]([^'\"]+)['\"]\s*\]", slide_html)
             if font_name.strip()
+            and _normalized_css_font_family(font_name) not in declared_font_names
         }
     )
     return "\n".join(
@@ -357,28 +373,33 @@ async def render_pptx_slides_to_images(
         f"Rendering {len(slide_htmls)} slide previews from PPTX-to-HTML at {width}x{height}"
     )
 
-    image_paths: List[str] = []
-    for index, slide_html in enumerate(slide_htmls, start=1):
+    localized_slide_htmls = []
+    localized_font_css = _localize_preview_asset_urls(
+        "\n".join(css for css in (pptx_document.font_css, local_font_css) if css)
+    )
+    for slide_html in slide_htmls:
         localized_slide_html = _localize_preview_asset_urls(slide_html)
-        localized_font_css = _localize_preview_asset_urls(
-            "\n".join(css for css in (pptx_document.font_css, local_font_css) if css)
+        localized_slide_htmls.append(
+            _build_slide_preview_html(
+                localized_slide_html,
+                localized_font_css,
+                font_links=_font_stylesheet_links_for_slide_html(
+                    localized_slide_html, localized_font_css
+                ),
+                width=width,
+                height=height,
+            )
         )
-        html = _build_slide_preview_html(
-            localized_slide_html,
-            localized_font_css,
-            font_links=_font_stylesheet_links_for_slide_html(localized_slide_html),
-            width=width,
-            height=height,
-        )
-        rendered = await EXPORT_TASK_SERVICE.render_html_to_image(
-            html=html,
-            width=width,
-            height=height,
-        )
-        image_paths.append(rendered.path)
-        logger.info(f"Rendered HTML preview for slide {index}")
 
-    return image_paths
+    rendered = await EXPORT_TASK_SERVICE.render_htmls_to_images(
+        htmls=localized_slide_htmls,
+        width=width,
+        height=height,
+    )
+    logger.info(
+        f"Rendered {len(rendered.paths)} HTML slide previews in one Chromium task"
+    )
+    return rendered.paths
 
 
 def _font_variants_by_normalized_name(pptx_path: str) -> Dict[str, Set[str]]:

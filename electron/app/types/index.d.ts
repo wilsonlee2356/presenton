@@ -70,6 +70,12 @@ interface FastApiEnv {
   EXPORT_PACKAGE_ROOT?: string,
   /** Directory used by FastAPI export task runtime resolution. */
   EXPORT_RUNTIME_DIR?: string,
+  /** Absolute path to the Chromium executable used by the export runtime. */
+  PUPPETEER_EXECUTABLE_PATH?: string,
+  /** Writable Puppeteer browser cache directory. */
+  PUPPETEER_CACHE_DIR?: string,
+  /** Writable Puppeteer temporary directory. */
+  PUPPETEER_TMP_DIR?: string,
   /** Absolute path to bundled PyInstaller converter binary for export runtime. */
   BUILT_PYTHON_MODULE_PATH?: string,
 }
