@@ -21,6 +21,10 @@ from services.document_conversion_service import (
     DocumentConversionService,
 )
 from services.liteparse_service import LiteParseError, LiteParseService
+from services.office_document_service import (
+    OfficeDocumentError,
+    extract_office_document_text,
+)
 from utils.ocr_language import presentation_language_to_ocr_code
 
 # Optional fallback converter (primarily useful on Windows)
@@ -221,7 +225,6 @@ class DocumentsLoader:
                 document = await asyncio.to_thread(
                     self.load_office_document,
                     file_path,
-                    temp_dir,
                 )
             elif extension in IMAGE_EXTENSIONS:
                 document = await asyncio.to_thread(
@@ -281,24 +284,12 @@ class DocumentsLoader:
         with open(file_path, "r", encoding="utf-8") as file:
             return await asyncio.to_thread(file.read)
 
-    def load_office_document(self, file_path: str, temp_dir: Optional[str] = None) -> str:
-        if temp_dir:
-            converted_path = self.document_conversion_service.convert_office_to_pdf(
-                file_path,
-                temp_dir,
-                timeout_seconds=self.DECOMPOSE_TIMEOUT_SECONDS,
-            )
-            is_scanned = self._is_scanned_pdf(converted_path)
-            return self._parse_with_liteparse(converted_path, dpi=300 if is_scanned else None)
-
-        with tempfile.TemporaryDirectory(prefix="office-convert-") as conversion_dir:
-            converted_path = self.document_conversion_service.convert_office_to_pdf(
-                file_path,
-                conversion_dir,
-                timeout_seconds=self.DECOMPOSE_TIMEOUT_SECONDS,
-            )
-            is_scanned = self._is_scanned_pdf(converted_path)
-            return self._parse_with_liteparse(converted_path, dpi=300 if is_scanned else None)
+    @staticmethod
+    def load_office_document(file_path: str) -> str:
+        try:
+            return extract_office_document_text(file_path)
+        except OfficeDocumentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def load_image(self, file_path: str, temp_dir: Optional[str] = None) -> str:
         if temp_dir:
@@ -326,7 +317,7 @@ class DocumentsLoader:
                 ocr_language=self._ocr_language,
                 dpi=dpi,
             )
-        except (LiteParseError, DocumentConversionError) as exc:
+        except (LiteParseError, DocumentConversionError, OfficeDocumentError) as exc:
             LOGGER.warning(
                 "[DocumentsLoader] Primary parse failed file=%s error=%s",
                 file_path,

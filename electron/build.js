@@ -234,7 +234,6 @@ const config = {
   },
   deb: {
     afterInstall: "build/after-install.tpl",
-    recommends: ["libreoffice"],
   },
   win: {
     target: ["nsis", "appx"],

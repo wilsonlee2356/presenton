@@ -163,6 +163,29 @@ function validateExistingRuntime() {
   return { ok: true, converterPath };
 }
 
+function patchHtmlToImageRuntime() {
+  if (!fs.existsSync(targetIndex)) {
+    return false;
+  }
+
+  const original = fs.readFileSync(targetIndex, "utf8");
+  let patched = original.replace(
+    'await C.setContent(a.html,{waitUntil:"networkidle0",timeout:12e4})',
+    'await C.setContent(a.html,{waitUntil:"domcontentloaded",timeout:12e4})',
+  );
+  patched = patched.replace(
+    'catch(C){throw C instanceof ig?C:new ig("Failed to render HTML to image",500)}',
+    'catch(C){console.error("[html-to-image]",C);throw C instanceof ig?C:new ig("Failed to render HTML to image",500)}',
+  );
+
+  if (patched === original) {
+    return false;
+  }
+  fs.writeFileSync(targetIndex, patched);
+  console.log("[export-runtime] Patched HTML-to-image readiness and error logging.");
+  return true;
+}
+
 function hasExportDirectoryContent() {
   if (!fs.existsSync(targetRoot)) return false;
   return fs.readdirSync(targetRoot).length > 0;
@@ -490,6 +513,7 @@ async function main() {
   }
 
   if (existing.ok && !forceDownload) {
+    patchHtmlToImageRuntime();
     console.log("[export-runtime] Using existing runtime artifacts:");
     console.log(`  - ${targetIndex}`);
     console.log(`  - ${existing.converterPath}`);
@@ -501,6 +525,7 @@ async function main() {
   }
 
   const { tag, downloadUrl } = await downloadAndInstallRuntime();
+  patchHtmlToImageRuntime();
   const installed = validateExistingRuntime();
   if (!installed.ok) {
     throw new Error(installed.reason);

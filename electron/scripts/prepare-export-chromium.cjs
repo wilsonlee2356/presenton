@@ -1,4 +1,5 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const {
@@ -35,32 +36,62 @@ function runtimeLooksComplete(executablePath) {
 
 function validateExecutable(executablePath) {
   if (!runtimeLooksComplete(executablePath)) {
-    return false;
+    return { ok: false, reason: "Chromium runtime layout is incomplete." };
   }
 
-  const result = spawnSync(
-    executablePath,
-    [
-      "--headless=new",
-      "--disable-gpu",
-      "--disable-dev-shm-usage",
-      "--no-sandbox",
-      "--no-first-run",
-      "--disable-extensions",
-      "--dump-dom",
-      "about:blank",
-    ],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      timeout: 15000,
-      windowsHide: process.platform === "win32",
-    },
-  );
-  if (result.status !== 0) {
-    return false;
+  if (process.platform === "darwin") {
+    const appBundlePath = findAppBundle(executablePath);
+    const result = spawnSync(
+      "codesign",
+      ["--verify", "--deep", "--strict", appBundlePath],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
+      },
+    );
+    if (result.status !== 0) {
+      const detail = result.error?.message || result.stderr || `status=${result.status}`;
+      return { ok: false, reason: detail.trim() };
+    }
+    return { ok: true };
   }
-  return (result.stdout || "").toLowerCase().includes("<html");
+
+  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "presenton-chromium-probe-"));
+  try {
+    const result = spawnSync(
+      executablePath,
+      [
+        "--headless=new",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--disable-extensions",
+        "--disable-crash-reporter",
+        "--no-first-run",
+        "--no-sandbox",
+        "--password-store=basic",
+        "--use-mock-keychain",
+        `--user-data-dir=${profileDir}`,
+        "--dump-dom",
+        "about:blank",
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
+        timeout: 15000,
+        windowsHide: process.platform === "win32",
+      },
+    );
+    if (result.status !== 0) {
+      const detail = result.error?.message || result.stderr || `status=${result.status}`;
+      return { ok: false, reason: detail.trim() };
+    }
+    if (!(result.stdout || "").toLowerCase().includes("<html")) {
+      return { ok: false, reason: "Chromium probe did not produce HTML output." };
+    }
+    return { ok: true };
+  } finally {
+    fs.rmSync(profileDir, { recursive: true, force: true });
+  }
 }
 
 function writeManifest(platform, executablePath) {
@@ -199,7 +230,29 @@ function normalizeMacBundleForPackaging(executablePath) {
       `[Chromium] Rewrote ${rewritten} framework symlinks to avoid nested Current references.`,
     );
   }
+  adHocSignMacBundle(appBundlePath);
   return rewritten;
+}
+
+function adHocSignMacBundle(appBundlePath) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const result = spawnSync(
+    "codesign",
+    ["--force", "--deep", "--sign", "-", "--timestamp=none", appBundlePath],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Failed to re-sign normalized Chromium bundle: ${(result.stderr || result.stdout || "").trim()}`,
+    );
+  }
+  console.log(`[Chromium] Re-signed normalized macOS bundle: ${appBundlePath}`);
 }
 
 function normalizeBundledMacChromiumForPackaging(rootDir = cacheDir) {
@@ -234,7 +287,7 @@ function normalizeBundledMacChromiumForPackaging(rootDir = cacheDir) {
 }
 
 function removeIncompleteRuntime(platform, executablePath) {
-  if (validateExecutable(executablePath)) {
+  if (validateExecutable(executablePath).ok) {
     return;
   }
 
@@ -268,11 +321,11 @@ async function main() {
   };
   const executablePath = computeExecutablePath(options);
   if (runtimeLooksComplete(executablePath)) {
-    if (!validateExecutable(executablePath)) {
+    if (!validateExecutable(executablePath).ok) {
       removeIncompleteRuntime(platform, executablePath);
     } else {
       normalizeMacBundleForPackaging(executablePath);
-      if (!validateExecutable(executablePath)) {
+      if (!validateExecutable(executablePath).ok) {
         removeIncompleteRuntime(platform, executablePath);
       } else {
         writeManifest(platform, executablePath);
@@ -282,7 +335,7 @@ async function main() {
     }
   }
 
-  if (validateExecutable(executablePath)) {
+  if (validateExecutable(executablePath).ok) {
     writeManifest(platform, executablePath);
     return;
   }
@@ -301,8 +354,11 @@ async function main() {
   process.stdout.write("\n");
 
   normalizeMacBundleForPackaging(executablePath);
-  if (!validateExecutable(executablePath)) {
-    throw new Error(`Chromium install finished, but executable was not found at ${executablePath}`);
+  const validation = validateExecutable(executablePath);
+  if (!validation.ok) {
+    throw new Error(
+      `Chromium install finished, but the launch probe failed: ${validation.reason}\n${executablePath}`,
+    );
   }
   writeManifest(platform, executablePath);
   console.log(`[Chromium] Bundled runtime ready: ${executablePath}`);
@@ -316,6 +372,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  adHocSignMacBundle,
   normalizeBundledMacChromiumForPackaging,
   normalizeMacBundleForPackaging,
 };

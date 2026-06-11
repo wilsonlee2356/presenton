@@ -10,6 +10,7 @@ import {
   ensureDirectoriesExist,
   fastapiDir,
   getAppDataDir,
+  getCacheDir,
   getTempDir,
   getUserConfigPath,
   initializeAppPaths,
@@ -19,8 +20,6 @@ import {
 } from "./utils/constants";
 import { setupIpcHandlers } from "./ipc";
 import { stopActiveExportProcesses } from "./ipc/export_handlers";
-import { setupLibreOfficeInstallHandlers, stopActiveLibreOfficeInstallProcesses } from "./ipc/libreoffice_install_handlers";
-import { getSofficePath } from "./utils/libreoffice-check";
 import { getLiteParseRunnerPath } from "./utils/liteparse-check";
 import {
   buildPathWithImageMagick,
@@ -46,6 +45,7 @@ import {
   prepareChromiumCacheRecovery,
   type ChromiumCacheRecoveryStatus,
 } from "./utils/chromium-cache-recovery";
+import { resolveLaunchableExportChromiumPath } from "./utils/export-chromium";
 
 installSafeConsole();
 
@@ -307,10 +307,23 @@ async function startServers(fastApiPort: number, nextjsPort: number) {
     const tempDir = getTempDir();
     const userConfigPath = getUserConfigPath();
     const disableAuthForElectron = resolveElectronDisableAuth();
-    const sofficePath = getSofficePath();
     const imageMagickRuntime = resolveImageMagickRuntime();
     const exportPackageRoot = path.join(baseDir, "resources", "export");
     const exportConverterPath = resolveExportConverterPath(baseDir);
+    const exportChromiumPath = await resolveLaunchableExportChromiumPath();
+    const puppeteerCacheDir = path.join(getCacheDir(), "puppeteer");
+    const puppeteerTempDir = path.join(tempDir, "puppeteer");
+    await Promise.all([
+      fs.promises.mkdir(puppeteerCacheDir, { recursive: true }),
+      fs.promises.mkdir(puppeteerTempDir, { recursive: true }),
+    ]);
+    if (exportChromiumPath) {
+      safeLog("[Presenton] Export Chromium runtime resolved:", exportChromiumPath);
+    } else {
+      safeWarn(
+        "[Presenton] Export Chromium runtime was not found; Template Studio slide previews will fail until Chromium is installed."
+      );
+    }
     if (imageMagickRuntime) {
       safeLog("[Presenton] ImageMagick runtime resolved:", {
         source: imageMagickRuntime.source,
@@ -380,12 +393,6 @@ async function startServers(fastApiPort: number, nextjsPort: number) {
         USER_CONFIG_PATH: userConfigPath,
         MIGRATE_DATABASE_ON_STARTUP: "True",
         DISABLE_AUTH: disableAuthForElectron,
-        // Resolved by libreoffice-check.ts at startup when available; lets
-        // Python invoke the exact binary path instead of relying on PATH.
-        ...(sofficePath && {
-          SOFFICE_PATH: sofficePath,
-          PRESENTON_OFFICE_RENDERER: "libreoffice",
-        }),
         ...buildImageMagickEnv(imageMagickRuntime),
         LITEPARSE_RUNNER_PATH: getLiteParseRunnerPath(),
         // Use Electron's embedded runtime for LiteParse so parsing does not
@@ -394,6 +401,11 @@ async function startServers(fastApiPort: number, nextjsPort: number) {
         ELECTRON_RUN_AS_NODE: "1",
         EXPORT_PACKAGE_ROOT: exportPackageRoot,
         EXPORT_RUNTIME_DIR: exportPackageRoot,
+        PUPPETEER_CACHE_DIR: puppeteerCacheDir,
+        PUPPETEER_TMP_DIR: puppeteerTempDir,
+        ...(exportChromiumPath && {
+          PUPPETEER_EXECUTABLE_PATH: exportChromiumPath,
+        }),
         ...(exportConverterPath && {
           BUILT_PYTHON_MODULE_PATH: exportConverterPath,
         }),
@@ -452,7 +464,6 @@ async function forceQuitApp(exitCode = 0) {
   stopUpdateChecker();
   try {
     await stopActiveExportProcesses();
-    await stopActiveLibreOfficeInstallProcesses();
     await stopServers();
   } finally {
     app.exit(exitCode);
@@ -473,9 +484,6 @@ app.whenReady().then(async () => {
     chromiumCacheRecovery,
   );
   updateSentryRuntimeContext(chromiumCacheRecovery);
-
-  // Register LibreOffice handlers for Template Studio's on-demand installer.
-  setupLibreOfficeInstallHandlers();
 
   // Create main window and show the launch page while local servers boot.
   createWindow();

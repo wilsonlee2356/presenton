@@ -14,9 +14,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from fastapi import HTTPException, UploadFile
 from pydantic import BaseModel
 
-from services.documents_loader import DocumentsLoader
 from services.export_task_service import EXPORT_TASK_SERVICE
-from templates.pptx_convert import convert_pptx_to_pdf
 from templates.pptx_font_utils import (
     FontDetail,
     _font_style_variant,
@@ -213,12 +211,28 @@ def _localize_preview_asset_urls(html: str) -> str:
     )
 
 
-def _font_stylesheet_links_for_slide_html(slide_html: str) -> str:
+def _normalized_css_font_family(value: str) -> str:
+    return " ".join(value.replace("_", " ").split()).casefold()
+
+
+def _font_stylesheet_links_for_slide_html(
+    slide_html: str, declared_font_css: str = ""
+) -> str:
+    declared_font_names = {
+        _normalized_css_font_family(font_name)
+        for font_name in re.findall(
+            r"font-family\s*:\s*['\"]?([^;'\"}]+)",
+            declared_font_css,
+            flags=re.IGNORECASE,
+        )
+        if font_name.strip()
+    }
     font_names = sorted(
         {
             font_name.replace("_", " ").strip()
             for font_name in re.findall(r"font-\[\s*['\"]([^'\"]+)['\"]\s*\]", slide_html)
             if font_name.strip()
+            and _normalized_css_font_family(font_name) not in declared_font_names
         }
     )
     return "\n".join(
@@ -325,7 +339,7 @@ def _build_slide_preview_html(
 </html>"""
 
 
-async def _create_slide_previews_from_html(
+async def render_pptx_slides_to_images(
     modified_pptx_path: str,
     font_paths_for_install: List[str],
     max_slides: Optional[int],
@@ -359,28 +373,33 @@ async def _create_slide_previews_from_html(
         f"Rendering {len(slide_htmls)} slide previews from PPTX-to-HTML at {width}x{height}"
     )
 
-    image_paths: List[str] = []
-    for index, slide_html in enumerate(slide_htmls, start=1):
+    localized_slide_htmls = []
+    localized_font_css = _localize_preview_asset_urls(
+        "\n".join(css for css in (pptx_document.font_css, local_font_css) if css)
+    )
+    for slide_html in slide_htmls:
         localized_slide_html = _localize_preview_asset_urls(slide_html)
-        localized_font_css = _localize_preview_asset_urls(
-            "\n".join(css for css in (pptx_document.font_css, local_font_css) if css)
+        localized_slide_htmls.append(
+            _build_slide_preview_html(
+                localized_slide_html,
+                localized_font_css,
+                font_links=_font_stylesheet_links_for_slide_html(
+                    localized_slide_html, localized_font_css
+                ),
+                width=width,
+                height=height,
+            )
         )
-        html = _build_slide_preview_html(
-            localized_slide_html,
-            localized_font_css,
-            font_links=_font_stylesheet_links_for_slide_html(localized_slide_html),
-            width=width,
-            height=height,
-        )
-        rendered = await EXPORT_TASK_SERVICE.render_html_to_image(
-            html=html,
-            width=width,
-            height=height,
-        )
-        image_paths.append(rendered.path)
-        logger.info(f"Rendered HTML preview for slide {index}")
 
-    return image_paths
+    rendered = await EXPORT_TASK_SERVICE.render_htmls_to_images(
+        htmls=localized_slide_htmls,
+        width=width,
+        height=height,
+    )
+    logger.info(
+        f"Rendered {len(rendered.paths)} HTML slide previews in one Chromium task"
+    )
+    return rendered.paths
 
 
 def _font_variants_by_normalized_name(pptx_path: str) -> Dict[str, Set[str]]:
@@ -928,28 +947,15 @@ async def create_slide_previews(
     logger,
     session_dir: str,
 ) -> List[str]:
-    try:
-        screenshot_paths = await _create_slide_previews_from_html(
-            modified_pptx_path=modified_pptx_path,
-            font_paths_for_install=font_paths_for_install,
-            max_slides=max_slides,
-            logger=logger,
-        )
-        logger.info("Generated slide previews from PPTX-to-HTML")
-    except Exception as e:
-        logger.warning(
-            f"PPTX-to-HTML preview rendering failed, falling back to PDF previews: {e}"
-        )
-        screenshot_paths = await _create_slide_previews_from_pdf(
-            modified_pptx_path=modified_pptx_path,
-            temp_dir=temp_dir,
-            font_paths_for_install=font_paths_for_install,
-            font_mapping=font_mapping,
-            explicit_font_aliases=explicit_font_aliases,
-            protected_font_names=protected_font_names,
-            max_slides=max_slides,
-            logger=logger,
-        )
+    del temp_dir, font_mapping, explicit_font_aliases, protected_font_names
+
+    screenshot_paths = await render_pptx_slides_to_images(
+        modified_pptx_path=modified_pptx_path,
+        font_paths_for_install=font_paths_for_install,
+        max_slides=max_slides,
+        logger=logger,
+    )
+    logger.info("Generated slide previews from PPTX-to-HTML with Chromium")
 
     if not screenshot_paths:
         raise HTTPException(status_code=500, detail="Failed to generate slide images")
@@ -963,75 +969,6 @@ async def create_slide_previews(
     logger.info("Persisted slide images")
 
     return slide_image_paths
-
-
-async def _create_slide_previews_from_pdf(
-    modified_pptx_path: str,
-    temp_dir: str,
-    font_paths_for_install: List[str],
-    font_mapping: Dict[str, str],
-    explicit_font_aliases: Optional[Dict[str, str]],
-    protected_font_names: Optional[List[str]],
-    max_slides: Optional[int],
-    logger,
-) -> List[str]:
-    # Also try to fetch and install Google Fonts present in the PPTX (post-replacement)
-    try:
-        present_fonts = await asyncio.to_thread(
-            extract_used_fonts_from_pptx, modified_pptx_path
-        )
-        # Exclude empties and fonts we already replaced with custom files
-        exclude_fonts = set(font_mapping.values()) if font_mapping else set()
-        candidate_google_fonts = {
-            normalize_font_family_name(f)
-            for f in present_fonts
-            if f and f not in exclude_fonts
-        }
-        variants_by_normalized_name = await asyncio.to_thread(
-            _font_variants_by_normalized_name, modified_pptx_path
-        )
-
-        downloaded_google_fonts = await _download_available_google_fonts(
-            candidate_google_fonts, temp_dir, logger, variants_by_normalized_name
-        )
-        if downloaded_google_fonts:
-            font_paths_for_install.extend(downloaded_google_fonts)
-        logger.info("Prepared Google Fonts for install")
-    except Exception as e:
-        logger.warning(f"Error while preparing Google Fonts for install: {e}")
-
-    # Convert PPTX to PDF using shared helper (respects custom font config)
-    logger.info("Converting PPTX to PDF")
-    try:
-        actual_pdf_path = await convert_pptx_to_pdf(
-            modified_pptx_path,
-            temp_dir,
-            font_paths=font_paths_for_install if font_paths_for_install else None,
-            explicit_font_aliases=explicit_font_aliases,
-            protected_font_names=protected_font_names,
-            logger=logger,
-        )
-        logger.info(f"PDF generated at {actual_pdf_path}")
-    except Exception as e:
-        logger.error(f"LibreOffice conversion failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to convert PPTX to PDF: {str(e)}",
-        )
-
-    # Generate screenshots from PDF (limit to first 25 slides)
-    logger.info("Generating slide images from PDF")
-    screenshot_paths = await DocumentsLoader.get_page_images_from_pdf_async(
-        actual_pdf_path, temp_dir
-    )
-    if max_slides and len(screenshot_paths) > max_slides:
-        logger.info(
-            f"Capping slide images from {len(screenshot_paths)} to {max_slides}"
-        )
-        screenshot_paths = screenshot_paths[:max_slides]
-    logger.info(f"Prepared {len(screenshot_paths)} slide images for upload")
-
-    return screenshot_paths
 
 
 async def upload_presentations(

@@ -57,10 +57,6 @@ interface FastApiEnv {
   USER_CONFIG_PATH?: string,
   MIGRATE_DATABASE_ON_STARTUP?: string,
   DISABLE_AUTH?: string,
-  /** Absolute path to the resolved LibreOffice executable discovered at startup. */
-  SOFFICE_PATH?: string,
-  /** Office renderer for PPTX/office conversion (always libreoffice when set). */
-  PRESENTON_OFFICE_RENDERER?: string,
   /** Absolute path to the bundled/resolved ImageMagick magick executable. */
   IMAGEMAGICK_BINARY?: string,
   /** ImageMagick runtime root used by the bundled portable build. */
@@ -81,6 +77,12 @@ interface FastApiEnv {
   EXPORT_PACKAGE_ROOT?: string,
   /** Directory used by FastAPI export task runtime resolution. */
   EXPORT_RUNTIME_DIR?: string,
+  /** Absolute path to the Chromium executable used by the export runtime. */
+  PUPPETEER_EXECUTABLE_PATH?: string,
+  /** Writable Puppeteer browser cache directory. */
+  PUPPETEER_CACHE_DIR?: string,
+  /** Writable Puppeteer temporary directory. */
+  PUPPETEER_TMP_DIR?: string,
   /** Absolute path to bundled PyInstaller converter binary for export runtime. */
   BUILT_PYTHON_MODULE_PATH?: string,
 }

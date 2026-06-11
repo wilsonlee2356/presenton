@@ -96,12 +96,6 @@ class LiteParseService:
         if magick_home:
             additional_entries.extend([magick_home, os.path.join(magick_home, "bin")])
 
-        soffice_binary = (env.get("SOFFICE_PATH") or "").strip()
-        if soffice_binary:
-            soffice_dir = os.path.dirname(soffice_binary)
-            if soffice_dir:
-                additional_entries.append(soffice_dir)
-
         if os.name != "nt":
             additional_entries.extend([
                 "/opt/homebrew/bin",

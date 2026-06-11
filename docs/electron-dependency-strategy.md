@@ -9,11 +9,9 @@ the Electron app while keeping Presenton Apache-2.0.
   for export rendering.
 - Bundle ImageMagick under `resources/imagemagick/` for each platform build; the
   packaged app validates that bundle during `afterPack`.
-- Use **LibreOffice only** for PPTX/office conversion and custom template rendering
-  on all platforms (Windows, macOS, Linux). Do not detect or automate Microsoft
-  PowerPoint.
-- Install LibreOffice via the in-app first-run installer (or an existing system
-  install). Do not bundle LibreOffice inside the desktop package.
+- Bundle the presentation export runtime for PPTX-to-HTML conversion and use
+  Chromium to render custom template previews.
+- Extract modern OOXML/OpenDocument text directly without an office engine.
 
 ## Licensing Notes
 
@@ -32,11 +30,6 @@ Sources:
 - https://pptr.dev/supported-browsers
 - https://chromium.googlesource.com/chromium/src/+/main/LICENSE
 - https://www.chromium.org/chromium-os/licensing/
-
-LibreOffice is not bundled inside the Apache-2.0 desktop installer. Users install
-it separately (in-app installer or package manager) so LGPL/MPL compliance,
-notices, and updates stay outside the main app package.
-Source: https://www.libreoffice.org/licenses/
 
 ## Runtime Layout
 
@@ -94,12 +87,11 @@ other system installs.
 
 ## Current Behavior
 
-- FastAPI receives `SOFFICE_PATH` and `PRESENTON_OFFICE_RENDERER=libreoffice` when
-  LibreOffice is detected at startup.
 - FastAPI receives `IMAGEMAGICK_BINARY`, `MAGICK_HOME`, and
   `MAGICK_CONFIGURE_PATH` when the bundled or system ImageMagick runtime is
   detected at startup.
-- PPTX-to-PDF and office document conversion use LibreOffice (`soffice`) only.
+- PPTX previews use the bundled PPTX-to-HTML converter and Chromium renderer.
+- Modern OOXML/OpenDocument text extraction uses the bundled Python parser.
 - Export Chromium and ImageMagick resolution check manifest-backed bundled app
   runtimes before user or system locations.
 
@@ -110,8 +102,7 @@ Before `npm run build:electron`:
 1. Run `npm run prepare:export-chromium` so Chromium is under `resources/chromium/`.
 2. Run `npm run prepare:imagemagick` so ImageMagick is under
    `resources/imagemagick/<platform>-<arch>/`.
-3. LibreOffice is **not** included in the package; the unified setup installer
-   downloads or guides installation on first launch.
+3. The bundled export runtime and Chromium handle Template Studio previews.
 
 Microsoft Store (MSIX/APPX) packages install under `Program Files\WindowsApps`.
 Bundled Chrome cannot be launched in place from that folder; on first export the app
