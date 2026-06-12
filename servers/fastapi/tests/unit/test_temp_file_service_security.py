@@ -55,3 +55,32 @@ def test_resolve_temp_path_rejects_symlink_escape(managed_temp_dir, tmp_path):
 
     assert exc.value.status_code == 400
     assert "temp directory" in exc.value.detail
+
+
+def test_resolve_temp_path_accepts_symlinked_parent_of_managed_dir(
+    managed_temp_dir, tmp_path, monkeypatch
+):
+    linked_parent = tmp_path / "linked-parent"
+
+    try:
+        linked_parent.symlink_to(managed_temp_dir.parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available on this platform")
+
+    linked_managed_dir = linked_parent / managed_temp_dir.name
+    temp_file = managed_temp_dir / "inside.txt"
+    temp_file.write_text("content", encoding="utf-8")
+    monkeypatch.setattr(TEMP_FILE_SERVICE, "base_dir", str(linked_managed_dir))
+
+    assert TEMP_FILE_SERVICE.resolve_temp_path(
+        str(linked_managed_dir / temp_file.name), must_exist=True
+    ) == str(temp_file)
+
+
+def test_resolve_temp_path_requires_existing_path(managed_temp_dir):
+    missing_file = managed_temp_dir / "missing.txt"
+
+    with pytest.raises(HTTPException) as exc:
+        TEMP_FILE_SERVICE.resolve_temp_path(str(missing_file), must_exist=True)
+
+    assert exc.value.status_code == 404

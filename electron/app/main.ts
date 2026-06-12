@@ -49,6 +49,12 @@ import { resolveLaunchableExportChromiumPath } from "./utils/export-chromium";
 
 installSafeConsole();
 
+// Local and ad-hoc signed macOS builds otherwise prompt for Keychain access when
+// Chromium initializes encrypted session storage.
+if (process.platform === "darwin") {
+  app.commandLine.appendSwitch("use-mock-keychain");
+}
+
 // Linux Chromium requires chrome-sandbox to be root-owned mode 4755; unpacked
 // dist/linux-unpacked builds usually lack that. Disable sandbox only when invalid.
 if (process.platform === "linux") {

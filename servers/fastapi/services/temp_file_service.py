@@ -36,19 +36,8 @@ class TempFileService:
         if not isinstance(file_path, str) or not file_path.strip():
             raise HTTPException(status_code=400, detail="Invalid file path")
 
-        normalized_path = os.path.abspath(file_path)
-        base_dir = self._base_dir_realpath()
-        if not (
-            normalized_path == base_dir
-            or normalized_path.startswith(f"{base_dir}{os.sep}")
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="File path must stay within the temp directory",
-            )
-
         try:
-            resolved_path = os.path.realpath(normalized_path)
+            resolved_path = os.path.realpath(os.path.abspath(file_path))
         except OSError as exc:
             raise HTTPException(status_code=404, detail="File not found") from exc
 
@@ -61,6 +50,9 @@ class TempFileService:
                 status_code=400,
                 detail="File path must stay within the temp directory",
             )
+
+        if must_exist and not os.path.exists(resolved_path):
+            raise HTTPException(status_code=404, detail="File not found")
 
         return resolved_path
 
