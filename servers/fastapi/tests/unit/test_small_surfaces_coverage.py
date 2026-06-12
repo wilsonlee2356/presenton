@@ -363,7 +363,7 @@ def test_handle_llm_client_exceptions(monkeypatch):
     llmai_err = LLMAIBaseError(status_code=429, message="busy")
     assert handle_llm_client_exceptions(llmai_err).detail == "busy"
 
-    assert "OpenAI API error" in handle_llm_client_exceptions(
+    assert "OpenAI API request failed" in handle_llm_client_exceptions(
         OpenAIAPIError(
             message="boom",
             request=httpx.Request("POST", "https://x"),

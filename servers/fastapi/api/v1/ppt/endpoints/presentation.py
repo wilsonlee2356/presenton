@@ -413,10 +413,13 @@ async def stream_presentation(
 
         async_assets_generation_tasks: List[asyncio.Task] = []
         asset_events: asyncio.Queue = asyncio.Queue()
+        asset_warnings_by_slide: dict[int, list[dict]] = {}
 
         async def notify_slide_assets_ready(slide_index: int, asset_task: asyncio.Task):
-            await asset_task
-            await asset_events.put(slide_index)
+            try:
+                await asset_task
+            finally:
+                await asset_events.put(slide_index)
 
         slides: List[SlideModel] = []
         yield SSEResponse(
@@ -455,6 +458,7 @@ async def stream_presentation(
             process_slide_add_placeholder_assets(slide)
 
             # This will mutate slide - start task immediately so it runs in parallel with next slide LLM generation
+            asset_warnings_by_slide[i] = []
             asset_task = asyncio.create_task(
                 process_slide_and_fetch_assets(
                     image_generation_service,
@@ -465,6 +469,8 @@ async def stream_presentation(
                         else None
                     ),
                     icon_weight=icon_weight,
+                    allow_image_fallback=True,
+                    image_warnings=asset_warnings_by_slide[i],
                 )
             )
             async_assets_generation_tasks.append(asset_task)
@@ -488,6 +494,7 @@ async def stream_presentation(
                             "type": "slide_assets",
                             "slide_index": done_idx,
                             "slide": slides[done_idx].model_dump(mode="json"),
+                            "warnings": asset_warnings_by_slide.get(done_idx, []),
                         }
                     ),
                 ).to_string()
@@ -507,6 +514,7 @@ async def stream_presentation(
                         "type": "slide_assets",
                         "slide_index": done_idx,
                         "slide": slides[done_idx].model_dump(mode="json"),
+                        "warnings": asset_warnings_by_slide.get(done_idx, []),
                     }
                 ),
             ).to_string()
