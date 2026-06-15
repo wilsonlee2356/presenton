@@ -283,8 +283,6 @@ const SettingsPage = () => {
       (llmConfig.LLM === "ollama" && !llmConfig.OLLAMA_MODEL) ||
       (llmConfig.LLM === "custom" && !llmConfig.CUSTOM_MODEL)
     ) {
-      notify.error("Cannot save settings", "Please select a model for the selected provider");
-
       const currentUrl = window.location.href;
 
       const handleBeforeUnload = (e: BeforeUnloadEvent) => {
