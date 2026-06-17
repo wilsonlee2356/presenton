@@ -376,6 +376,43 @@ docker stop presenton && docker rm presenton && docker run -it --name presenton 
 
 Sign out from the app: **Settings → Other → Sign out**.
 
+#### MCP authentication
+
+When auth is configured (`AUTH_USERNAME` / `AUTH_PASSWORD`), the MCP endpoint at `/mcp` now requires authentication as well.
+
+1. Log in once to get a bearer token:
+
+```bash
+curl -s -X POST http://localhost:5000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"changeme123"}'
+```
+
+The response includes:
+
+- `access_token` (session token)
+- `token_type` (`bearer`)
+
+2. Configure your MCP client to send that token on every request:
+
+```json
+{
+  "mcpServers": {
+    "presenton": {
+      "url": "http://localhost:5000/mcp",
+      "headers": {
+        "Authorization": "Bearer <access_token>"
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- If you rotate credentials with `AUTH_OVERRIDE_FROM_ENV=true`, previously issued session tokens are invalidated.
+- In Electron mode (`DISABLE_AUTH=true`), MCP auth is disabled to match the local desktop auth behavior.
+
 > Note: LLM and image variables above are forwarded from **`docker-compose.yml`** when set in `.env`.
 
 <br>
