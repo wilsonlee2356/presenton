@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { LLMConfig } from "@/types/llm_config";
-import { getApiUrl } from "@/utils/api";
+import { getApiErrorMessage, getApiUrl } from "@/utils/api";
 import { LLM_PROVIDERS } from "@/utils/providerConstants";
 import {
   Check,
@@ -373,13 +373,14 @@ const TextProvider = ({ onInputChange, llmConfig }: OpenAIConfigProps) => {
           onInputChange(nextModel, currentModelField);
         }
       } else {
+        const message = await getApiErrorMessage(
+          response,
+          `The server could not list ${modelLabel} models. Check your API key or endpoint and try again.`
+        );
         console.error("Failed to fetch models");
         setAvailableModels([]);
         setModelsChecked(true);
-        notify.error(
-          "Could not load models",
-          `The server could not list ${modelLabel} models. Check your API key or endpoint and try again.`
-        );
+        notify.error("Could not load models", message);
       }
     } catch (error) {
       console.error("Error fetching models:", error);

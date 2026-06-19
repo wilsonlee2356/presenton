@@ -17,7 +17,7 @@ import { MixpanelEvent, trackEvent } from '@/utils/mixpanel';
 import { usePathname } from 'next/navigation';
 import { getLLMConfigValidationError, handleSaveLLMConfig } from '@/utils/storeHelpers';
 import { getDefaultOllamaUrl, isOllamaModelAvailable } from '@/utils/providerUtils';
-import { getApiUrl } from '@/utils/api';
+import { getApiErrorMessage, getApiUrl } from '@/utils/api';
 import CodexConfig from '../CodexConfig';
 import { CODEX_MODELS } from '@/utils/codexModels';
 import VertexAzureManualFields from '@/components/VertexAzureManualFields';
@@ -406,10 +406,14 @@ const PresentonMode = ({
                     }));
                 }
             } else {
+                const message = await getApiErrorMessage(
+                    response,
+                    `The server could not list ${LLM_PROVIDERS[llmConfig.LLM!]?.label} models. Check your API key or endpoint and try again.`
+                );
                 console.error('Failed to fetch models');
                 setAvailableModels([]);
                 setModelsChecked(true);
-                notify.error("Could not load models", `The server could not list ${LLM_PROVIDERS[llmConfig.LLM!]?.label} models. Check your API key or endpoint and try again.`);
+                notify.error("Could not load models", message);
             }
         } catch (error) {
             console.error('Error fetching models:', error);
