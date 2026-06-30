@@ -58,6 +58,18 @@ function loadAsciiBanner() {
   }
 }
 
+function loadPackageVersion() {
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const packageJsonPath = path.join(thisDir, "..", "package.json");
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+    return typeof pkg.version === "string" ? pkg.version : "";
+  } catch {
+    return "";
+  }
+}
+
 /** Visible width (strips SGR sequences). */
 function visLen(s) {
   return s.replace(/\x1b\[[0-9;:]*m/g, "").length;
@@ -79,6 +91,7 @@ export function printPresentonStartupBanner(opts = {}) {
   const mode = opts.mode === "development" ? "development" : "production";
   const nextPort = opts.nextPort ?? 3000;
   const fastapiPort = opts.fastapiPort ?? 8000;
+  const version = opts.version ?? loadPackageVersion();
   const hostHttpPort =
     opts.hostHttpPort ??
     process.env.PRESENTON_HTTP_HOST_PORT ??
@@ -130,6 +143,9 @@ export function printPresentonStartupBanner(opts = {}) {
           pipe(padVis("  " + BOLD + "Routing summary" + RESET, W)),
           boxDivider,
           pipe(padVis("  " + muted("Mode:                 ") + mode, W)),
+          ...(version
+            ? [pipe(padVis("  " + muted("Version:              ") + version, W))]
+            : []),
           pipe(padVis("  " + accent("/         ") + muted("→ Next.js"), W)),
           pipe(padVis("  " + accent("/api/v1/  ") + muted("→ FastAPI"), W)),
           pipe(padVis("  " + muted("Next.js docker URL: ") + nextUrl, W)),
@@ -148,6 +164,9 @@ export function printPresentonStartupBanner(opts = {}) {
           pipe(padVis("  " + BOLD + "Application URL" + RESET, W)),
           boxDivider,
           pipe(padVis("  " + muted("Mode:             ") + mode, W)),
+          ...(version
+            ? [pipe(padVis("  " + muted("Version:          ") + version, W))]
+            : []),
           pipe(
             padVis(
               "  " +
