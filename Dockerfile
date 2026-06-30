@@ -94,7 +94,7 @@ ENV APP_DATA_DIRECTORY=/app_data \
 
 RUN set -eux; \
     packages="ca-certificates curl nginx fontconfig imagemagick zstd chromium \
-      fonts-liberation fonts-noto-core xdg-utils \
+      findutils fonts-noto-core fonts-noto-extra fonts-noto-mono fonts-noto-cjk fonts-noto-color-emoji xdg-utils \
       libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
       libcairo2 libcups2t64 libdbus-1-3 libdrm2 libexpat1 libgbm1 \
       libglib2.0-0t64 libgtk-3-0t64 libnspr4 libnss3 libpango-1.0-0 \
@@ -106,6 +106,11 @@ RUN set -eux; \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
     apt-get install -y --no-install-recommends nodejs; \
     rm -rf /var/lib/apt/lists/*
+
+# Remove any non-Noto fonts that may have been installed as dependencies.
+RUN find /usr/share/fonts -type f ! -iname 'Noto*' -delete \
+    && find /usr/share/fonts -type d -empty -delete \
+    && fc-cache -fsv
 
 RUN mkdir -p /app/scripts /app/servers/fastapi /app/servers/nextjs
 RUN mkdir -p /app_data/exports /app_data/images /app_data/uploads /app_data/fonts /app_data/pptx-to-html \
