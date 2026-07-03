@@ -10,6 +10,7 @@ const initialState: UserConfigState = {
   llm_config: {
     LLM: "openai",
     IMAGE_PROVIDER: "gpt-image-1.5",
+    CHATTERBOX_URL: "http://127.0.0.1:8001",
 
   },
   can_change_keys: false,

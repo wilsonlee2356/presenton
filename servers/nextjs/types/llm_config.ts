@@ -91,6 +91,9 @@ export interface LLMConfig {
   COMFYUI_URL?: string;
   COMFYUI_WORKFLOW?: string;
 
+  // Chatterbox TTS
+  CHATTERBOX_URL?: string;
+
   // Open WebUI Image Provider
   OPEN_WEBUI_IMAGE_URL?: string;
   OPEN_WEBUI_IMAGE_API_KEY?: string;

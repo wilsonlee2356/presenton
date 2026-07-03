@@ -77,6 +77,9 @@ export function ConfigurationInitializer({ children }: { children: React.ReactNo
       if (!llmConfig.LLM) {
         llmConfig.LLM = 'openai';
       }
+      if (!llmConfig.CHATTERBOX_URL) {
+        llmConfig.CHATTERBOX_URL = 'http://127.0.0.1:8001';
+      }
       llmConfig = normalizeLLMConfig(llmConfig);
 
       dispatch(setLLMConfig(llmConfig));

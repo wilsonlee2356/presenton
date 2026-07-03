@@ -2,6 +2,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Loader2, ChevronRight } from "lucide-react";
 import { notify } from "@/components/ui/sonner";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { RootState } from "@/store/store";
 import { useSelector } from "react-redux";
 import {
@@ -367,6 +369,37 @@ const SettingsPage = () => {
           />}
           {selectedProvider === 'image-provider' && <ImageProvider llmConfig={llmConfig} setLlmConfig={setLlmConfig} />}
           {selectedProvider === 'web-search-provider' && <WebSearchProvider llmConfig={llmConfig} setLlmConfig={setLlmConfig} />}
+          {selectedProvider === 'chatterbox' && (
+            <div className="w-full max-w-lg space-y-5 rounded-[20px] border border-[#EDEEEF] bg-white p-7">
+              <div>
+                <h4 className="font-unbounded text-lg font-normal text-black">Chatterbox TTS</h4>
+                <p className="mt-2 font-syne text-sm leading-relaxed text-[#494A4D]">
+                  Connect to your local or remote Chatterbox text-to-speech server.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="chatterbox-url" className="text-xs font-medium text-[#191919]">
+                  Server URL
+                </Label>
+                <Input
+                  id="chatterbox-url"
+                  type="url"
+                  placeholder="http://127.0.0.1:8001"
+                  value={llmConfig.CHATTERBOX_URL || ""}
+                  onChange={(e) =>
+                    setLlmConfig((prev) => ({
+                      ...prev,
+                      CHATTERBOX_URL: e.target.value,
+                    }))
+                  }
+                  className="rounded-[10px] border-[#EDEEEF] bg-white text-sm focus-visible:ring-[#7C51F8]"
+                />
+                <p className="text-xs text-[#6B7280]">
+                  The Chatterbox TTS server must allow CORS requests from this origin.
+                </p>
+              </div>
+            </div>
+          )}
           {selectedProvider === 'privacy' && <PrivacySettings />}
           {selectedProvider === "session" && (
             <div className="w-full max-w-lg space-y-5 rounded-[20px] border border-[#EDEEEF] bg-white p-7">

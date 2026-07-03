@@ -11,7 +11,7 @@ export const defaultNavItems = [
     { key: "dashboard" as const, label: "Dashboard", icon: LayoutDashboard },
     { key: "templates" as const, label: "Standard", icon: Star },
     { key: "designs" as const, label: "Smart", icon: Brain },
-    { key: "chatterebox" as const, label: "Chatterebox", icon: Mic },
+    { key: "chatterbox" as const, label: "Chatterbox", icon: Mic },
 
 
 ];
@@ -90,17 +90,17 @@ const DashboardSidebar = () => {
                         </Link>
                         <Link
                             prefetch={false}
-                            href={`/chatterebox`}
+                            href={`/chatterbox`}
                             className={[
                                 "flex flex-col tex-center items-center gap-2  transition-colors",
-                                pathname === "/chatterebox" ? "" : "ring-transparent",
+                                pathname === "/chatterbox" ? "" : "ring-transparent",
                             ].join(" ")}
-                            aria-label="Chatterebox"
-                            title="Chatterebox"
+                            aria-label="Chatterbox"
+                            title="Chatterbox"
                         >
                             <div className="flex flex-col cursor-pointer tex-center items-center gap-2  transition-colors">
-                                <Mic className={`h-4 w-4 ${pathname === "/chatterebox" ? "text-[#5146E5]" : "text-slate-600"}`} />
-                                <span className="text-[11px] text-slate-800">Chatterebox</span>
+                                <Mic className={`h-4 w-4 ${pathname === "/chatterbox" ? "text-[#5146E5]" : "text-slate-600"}`} />
+                                <span className="text-[11px] text-slate-800">Chatterbox</span>
                             </div>
                         </Link>
                     </div>
