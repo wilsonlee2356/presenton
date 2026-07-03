@@ -73,6 +73,14 @@ export interface PredefinedVoice {
   [key: string]: string | undefined;
 }
 
+/** Parsed SubRip subtitle entry. */
+export interface SrtEntry {
+  index: number;
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
 /** Generic shape for model-info and initial-data responses. */
 export type ChatterboxModelInfo = Record<string, unknown>;
 export type ChatterboxInitialData = Record<string, unknown>;

@@ -18,6 +18,9 @@ import {
   RotateCcw,
   Power,
   AlertCircle,
+  FileText,
+  Download,
+  Clapperboard,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,6 +37,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Progress } from "@/components/ui/progress";
 import { notify } from "@/components/ui/sonner";
 import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
@@ -44,8 +48,15 @@ import {
   OpenAISpeechRequest,
   OutputFormat,
   PredefinedVoice,
+  SrtEntry,
   VoiceMode,
 } from "@/app/(presentation-generator)/services/api/chatterbox-types";
+import {
+  formatSrtTime,
+  mapWithConcurrency,
+  mixSrtAudio,
+  parseSrt,
+} from "./srt-utils";
 
 const DEFAULT_OUTPUT_FORMAT: OutputFormat = "wav";
 
@@ -74,6 +85,21 @@ const ChatterboxPage = () => {
   const [openAIAudioUrl, setOpenAIAudioUrl] = useState<string | null>(null);
   const [isOpenAIPlaying, setIsOpenAIPlaying] = useState(false);
   const openAIAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const [srtEntries, setSrtEntries] = useState<SrtEntry[]>([]);
+  const [srtFileName, setSrtFileName] = useState<string>("");
+  const [srtStatus, setSrtStatus] = useState<
+    "idle" | "generating" | "mixing" | "done" | "error"
+  >("idle");
+  const [srtProgress, setSrtProgress] = useState({
+    current: 0,
+    total: 0,
+    failed: 0,
+  });
+  const [srtAudioUrl, setSrtAudioUrl] = useState<string | null>(null);
+  const [isSrtPlaying, setIsSrtPlaying] = useState(false);
+  const srtAudioRef = useRef<HTMLAudioElement | null>(null);
+  const srtFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [ttsRequest, setTtsRequest] = useState<CustomTTSRequest>({
     text: "",
@@ -172,8 +198,9 @@ const ChatterboxPage = () => {
     return () => {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       if (openAIAudioUrl) URL.revokeObjectURL(openAIAudioUrl);
+      if (srtAudioUrl) URL.revokeObjectURL(srtAudioUrl);
     };
-  }, [audioUrl, openAIAudioUrl]);
+  }, [audioUrl, openAIAudioUrl, srtAudioUrl]);
 
   const handleGenerateTTS = async () => {
     if (!isConfigured) return;
@@ -361,6 +388,148 @@ const ChatterboxPage = () => {
     }
   };
 
+  const handleSrtFileSelect = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    if (!file.name.toLowerCase().endsWith(".srt")) {
+      notify.warning("Invalid file", "Please upload a .srt subtitle file.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = String(e.target?.result ?? "");
+      const { entries, skipped } = parseSrt(content);
+      if (entries.length === 0) {
+        notify.warning("No valid entries", "Could not parse any subtitle entries from the file.");
+        setSrtEntries([]);
+        setSrtFileName("");
+        return;
+      }
+      setSrtEntries(entries);
+      setSrtFileName(file.name);
+      setSrtStatus("idle");
+      setSrtAudioUrl(null);
+      if (skipped > 0) {
+        notify.warning(
+          "Partial parse",
+          `${skipped} malformed entr${skipped === 1 ? "y was" : "ies were"} skipped.`
+        );
+      } else {
+        notify.success("SRT loaded", `${entries.length} subtitle entries ready.`);
+      }
+    };
+    reader.onerror = () => {
+      notify.error("Read failed", "Could not read the selected SRT file.");
+    };
+    reader.readAsText(file);
+  };
+
+  const handleGenerateSrtVoiceover = async () => {
+    if (!isConfigured) return;
+    if (srtEntries.length === 0) {
+      notify.warning("No SRT loaded", "Upload an SRT file first.");
+      return;
+    }
+    if (ttsRequest.voice_mode === "predefined" && !ttsRequest.predefined_voice_id) {
+      notify.warning("Voice required", "Select a predefined voice.");
+      return;
+    }
+    if (ttsRequest.voice_mode === "clone" && !ttsRequest.reference_audio_filename) {
+      notify.warning("Reference required", "Select a reference audio file for voice cloning.");
+      return;
+    }
+
+    setSrtStatus("generating");
+    setSrtProgress({ current: 0, total: srtEntries.length, failed: 0 });
+    setSrtAudioUrl(null);
+
+    const baseRequest = { ...ttsRequest, stream: false };
+
+    try {
+      const blobs = await mapWithConcurrency(
+        srtEntries,
+        3,
+        async (entry) => {
+          try {
+            const response = await ChatterboxApi.generateTTS({
+              ...baseRequest,
+              text: entry.text,
+            });
+            if (!response.ok) {
+              let message = "TTS generation failed";
+              try {
+                const body = (await response.json()) as { detail?: string };
+                if (body.detail) message = body.detail;
+              } catch {
+                // ignore
+              }
+              throw new Error(message);
+            }
+            const blob = await response.blob();
+            setSrtProgress((prev) => ({ ...prev, current: prev.current + 1 }));
+            return blob;
+          } catch (error) {
+            setSrtProgress((prev) => ({
+              ...prev,
+              current: prev.current + 1,
+              failed: prev.failed + 1,
+            }));
+            notify.error(
+              `Entry ${entry.index} failed`,
+              error instanceof Error ? error.message : "Unknown error"
+            );
+            return null;
+          }
+        }
+      );
+
+      const successful = blobs.filter(Boolean).length;
+      if (successful === 0) {
+        throw new Error("All subtitle entries failed to generate.");
+      }
+
+      setSrtStatus("mixing");
+      const mixed = await mixSrtAudio(blobs, srtEntries);
+      if (srtAudioUrl) URL.revokeObjectURL(srtAudioUrl);
+      const url = URL.createObjectURL(mixed);
+      setSrtAudioUrl(url);
+      setSrtStatus("done");
+      notify.success(
+        "Voiceover ready",
+        `${successful} of ${srtEntries.length} entries mixed into the final track.`
+      );
+    } catch (error) {
+      setSrtStatus("error");
+      notify.error(
+        "Voiceover failed",
+        error instanceof Error ? error.message : "Unknown error"
+      );
+    }
+  };
+
+  const toggleSrtPlay = () => {
+    if (!srtAudioRef.current) return;
+    if (isSrtPlaying) {
+      srtAudioRef.current.pause();
+    } else {
+      srtAudioRef.current.play();
+    }
+    setIsSrtPlaying(!isSrtPlaying);
+  };
+
+  const handleDownloadSrtAudio = () => {
+    if (!srtAudioUrl) return;
+    const link = document.createElement("a");
+    link.href = srtAudioUrl;
+    link.download = srtFileName
+      ? srtFileName.replace(/\.srt$/i, "_voiceover.wav")
+      : "voiceover.wav";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const togglePlay = () => {
     if (!audioRef.current) return;
     if (isPlaying) {
@@ -441,6 +610,9 @@ const ChatterboxPage = () => {
               </TabsTrigger>
               <TabsTrigger value="voices" className="text-xs">
                 Voice Library
+              </TabsTrigger>
+              <TabsTrigger value="srt" className="text-xs">
+                SRT Voiceover
               </TabsTrigger>
               <TabsTrigger value="server" className="text-xs">
                 Server & Settings
@@ -981,6 +1153,287 @@ const ChatterboxPage = () => {
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="srt" className="space-y-6 mt-6">
+              <Card className="rounded-[20px] border border-[#EDEEEF] bg-white shadow-sm">
+                <CardHeader className="p-7">
+                  <CardTitle className="font-unbounded text-lg font-normal text-black flex items-center gap-2">
+                    <Clapperboard className="h-5 w-5 text-[#7C51F8]" />
+                    SRT Voiceover
+                  </CardTitle>
+                  <CardDescription className="mt-2 text-sm leading-relaxed text-[#494A4D]">
+                    Upload a SubRip (.srt) file, choose a voice, and generate a timed
+                    voiceover track. Each subtitle entry is synthesized and placed at its
+                    original timestamp in the final WAV mix.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-7 pt-0 space-y-5">
+                  <div className="space-y-2">
+                    <Label className="text-xs font-medium text-[#191919]">Subtitle file</Label>
+                    <div className="flex items-center gap-3">
+                      <Label
+                        htmlFor="upload-srt"
+                        className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-[58px] border border-[#EDEEEF] bg-white px-4 py-2 text-xs font-medium transition hover:bg-[#F6F6F9] ${
+                          !isConfigured ? "opacity-50 cursor-not-allowed" : ""
+                        }`}
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        {srtFileName || "Choose .srt file"}
+                      </Label>
+                      <Input
+                        id="upload-srt"
+                        ref={srtFileInputRef}
+                        type="file"
+                        accept=".srt"
+                        onChange={(e) => handleSrtFileSelect(e.target.files)}
+                        disabled={!isConfigured}
+                        className="hidden"
+                      />
+                      {srtEntries.length > 0 && (
+                        <span className="text-xs text-[#6B7280]">
+                          {srtEntries.length} entries
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium text-[#191919]">Voice Mode</Label>
+                      <Select
+                        value={ttsRequest.voice_mode}
+                        onValueChange={(value) => updateTts("voice_mode", value as VoiceMode)}
+                        disabled={!isConfigured}
+                      >
+                        <SelectTrigger className="rounded-[10px] border-[#EDEEEF]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="predefined">Predefined</SelectItem>
+                          <SelectItem value="clone">Clone</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {ttsRequest.voice_mode === "predefined" ? (
+                      <div className="space-y-2">
+                        <Label className="text-xs font-medium text-[#191919]">
+                          Predefined Voice
+                        </Label>
+                        <Select
+                          value={ttsRequest.predefined_voice_id || ""}
+                          onValueChange={(value) => updateTts("predefined_voice_id", value)}
+                          disabled={!isConfigured || predefinedVoices.length === 0}
+                        >
+                          <SelectTrigger className="rounded-[10px] border-[#EDEEEF]">
+                            <SelectValue placeholder="Select a voice" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {predefinedVoices.map((voice) => (
+                              <SelectItem key={voice.filename} value={voice.filename}>
+                                {voice.display_name || voice.filename}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <Label className="text-xs font-medium text-[#191919]">
+                          Reference Audio
+                        </Label>
+                        <Select
+                          value={ttsRequest.reference_audio_filename || ""}
+                          onValueChange={(value) =>
+                            updateTts("reference_audio_filename", value)
+                          }
+                          disabled={!isConfigured || referenceFiles.length === 0}
+                        >
+                          <SelectTrigger className="rounded-[10px] border-[#EDEEEF]">
+                            <SelectValue placeholder="Select reference audio" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {referenceFiles.map((file) => (
+                              <SelectItem key={file} value={file}>
+                                {file}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium text-[#191919]">Output Format</Label>
+                      <Select
+                        value={ttsRequest.output_format}
+                        onValueChange={(value) => updateTts("output_format", value as OutputFormat)}
+                        disabled={!isConfigured}
+                      >
+                        <SelectTrigger className="rounded-[10px] border-[#EDEEEF]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="wav">WAV</SelectItem>
+                          <SelectItem value="opus">Opus</SelectItem>
+                          <SelectItem value="mp3">MP3</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium text-[#191919]">Language</Label>
+                      <Input
+                        placeholder="auto"
+                        value={ttsRequest.language || ""}
+                        onChange={(e) => updateTts("language", e.target.value || null)}
+                        disabled={!isConfigured}
+                        className="rounded-[10px] border-[#EDEEEF]"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium text-[#191919]">Speed Factor</Label>
+                      <Input
+                        type="number"
+                        step={0.1}
+                        placeholder="1.0"
+                        value={ttsRequest.speed_factor ?? ""}
+                        onChange={(e) =>
+                          updateTts(
+                            "speed_factor",
+                            e.target.value === "" ? null : parseFloat(e.target.value)
+                          )
+                        }
+                        disabled={!isConfigured}
+                        className="rounded-[10px] border-[#EDEEEF]"
+                      />
+                    </div>
+                  </div>
+
+                  {srtStatus !== "idle" && srtStatus !== "done" && srtStatus !== "error" && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-xs text-[#6B7280]">
+                        <span>
+                          {srtStatus === "generating" ? "Generating clips..." : "Mixing audio..."}
+                        </span>
+                        <span>
+                          {srtProgress.current} / {srtProgress.total}
+                          {srtProgress.failed > 0 && ` (${srtProgress.failed} failed)`}
+                        </span>
+                      </div>
+                      <Progress
+                        value={
+                          srtProgress.total > 0
+                            ? Math.round((srtProgress.current / srtProgress.total) * 100)
+                            : 0
+                        }
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-[#6B7280]">
+                      Final mix is exported as WAV regardless of the intermediate format.
+                    </p>
+                    <Button
+                      onClick={handleGenerateSrtVoiceover}
+                      disabled={
+                        !isConfigured || srtEntries.length === 0 || srtStatus === "generating" || srtStatus === "mixing"
+                      }
+                      className="rounded-[58px] bg-[#7C51F8] hover:bg-[#6d46e6] text-white px-5"
+                    >
+                      {srtStatus === "generating" || srtStatus === "mixing" ? (
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      ) : (
+                        <Wand2 className="h-4 w-4 mr-2" />
+                      )}
+                      Generate Voiceover
+                    </Button>
+                  </div>
+
+                  {srtAudioUrl && (
+                    <div className="rounded-[14px] border border-[#EDEEEF] p-4 space-y-3">
+                      <div className="flex items-center gap-3">
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          onClick={toggleSrtPlay}
+                          className="rounded-full border-[#EDEEEF]"
+                        >
+                          {isSrtPlaying ? (
+                            <Pause className="h-4 w-4" />
+                          ) : (
+                            <Play className="h-4 w-4" />
+                          )}
+                        </Button>
+                        <span className="text-sm text-[#191919]">Generated voiceover</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleDownloadSrtAudio}
+                          className="ml-auto rounded-[58px] border-[#EDEEEF] text-xs"
+                        >
+                          <Download className="h-3.5 w-3.5 mr-2" />
+                          Download WAV
+                        </Button>
+                      </div>
+                      <audio
+                        ref={srtAudioRef}
+                        src={srtAudioUrl}
+                        onEnded={() => setIsSrtPlaying(false)}
+                        className="w-full"
+                        controls
+                      />
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {srtEntries.length > 0 && (
+                <Card className="rounded-[20px] border border-[#EDEEEF] bg-white shadow-sm">
+                  <CardHeader className="p-7">
+                    <CardTitle className="font-unbounded text-lg font-normal text-black flex items-center gap-2">
+                      <FileText className="h-5 w-5 text-[#7C51F8]" />
+                      Subtitle Entries
+                    </CardTitle>
+                    <CardDescription className="mt-2 text-sm leading-relaxed text-[#494A4D]">
+                      Review the parsed subtitles before generating.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="p-7 pt-0">
+                    <div className="rounded-[10px] border border-[#EDEEEF] overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead className="bg-[#F6F6F9] text-[#6B7280]">
+                          <tr>
+                            <th className="px-4 py-2 text-left font-medium text-xs">#</th>
+                            <th className="px-4 py-2 text-left font-medium text-xs">Start</th>
+                            <th className="px-4 py-2 text-left font-medium text-xs">End</th>
+                            <th className="px-4 py-2 text-left font-medium text-xs">Text</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#EDEEEF]">
+                          {srtEntries.map((entry) => (
+                            <tr key={entry.index}>
+                              <td className="px-4 py-2 text-[#191919]">{entry.index}</td>
+                              <td className="px-4 py-2 text-[#191919] tabular-nums">
+                                {formatSrtTime(entry.startMs)}
+                              </td>
+                              <td className="px-4 py-2 text-[#191919] tabular-nums">
+                                {formatSrtTime(entry.endMs)}
+                              </td>
+                              <td className="px-4 py-2 text-[#191919] max-w-[300px] truncate">
+                                {entry.text}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
 
             <TabsContent value="server" className="space-y-6 mt-6">
