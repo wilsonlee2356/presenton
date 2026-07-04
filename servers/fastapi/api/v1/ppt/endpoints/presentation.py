@@ -16,7 +16,8 @@ from constants.presentation import DEFAULT_TEMPLATES, MAX_NUMBER_OF_SLIDES
 from enums.webhook_event import WebhookEvent
 from models.api_error_model import APIErrorModel
 from models.generate_presentation_request import GeneratePresentationRequest
-from models.presentation_and_path import PresentationPathAndEditPath
+from models.mp4_export_request import Mp4ExportRequest
+from models.presentation_and_path import PresentationAndPath, PresentationPathAndEditPath
 from models.presentation_from_template import EditPresentationRequest
 from models.presentation_outline_model import (
     PresentationOutlineModel,
@@ -38,6 +39,7 @@ from services.mem0_presentation_memory_service import (
 )
 from utils.dict_utils import deep_update
 from utils.export_utils import export_presentation
+from services.video_export_service import export_presentation_to_mp4
 from utils.llm_calls.generate_presentation_outlines import (
     generate_ppt_outline,
     get_messages as get_outline_messages,
@@ -230,6 +232,36 @@ async def delete_presentation(
 
     await sql_session.delete(presentation)
     await sql_session.commit()
+
+
+@PRESENTATION_ROUTER.post("/{id}/export/mp4", response_model=PresentationAndPath)
+async def export_presentation_mp4(
+    id: uuid.UUID,
+    request: Request,
+    export_request: Mp4ExportRequest,
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    """Export an existing presentation as an MP4 slideshow."""
+    presentation = await sql_session.get(PresentationModel, id)
+    if not presentation:
+        raise HTTPException(404, "Presentation not found")
+
+    slides_result = await sql_session.scalars(
+        select(SlideModel)
+        .where(SlideModel.presentation == id)
+        .order_by(SlideModel.index)
+    )
+    speaker_notes = [slide.speaker_note or "" for slide in slides_result]
+
+    cookie_header = _build_export_cookie_header(request)
+    return await export_presentation_to_mp4(
+        presentation_id=id,
+        title=presentation.title or "",
+        cookie_header=cookie_header,
+        include_narration=export_request.include_narration,
+        voice=export_request.voice,
+        speaker_notes=speaker_notes,
+    )
 
 
 @PRESENTATION_ROUTER.post("/create", response_model=PresentationModel)

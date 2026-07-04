@@ -9,6 +9,7 @@ from pathvalidate import sanitize_filename
 from models.presentation_and_path import PresentationAndPath
 from utils.filename_utils import safe_export_basename
 from services.export_task_service import EXPORT_TASK_SERVICE
+from services.video_export_service import export_presentation_to_mp4
 from utils.runtime_limits import log_memory
 
 
@@ -43,8 +44,11 @@ def _build_presentation_export_url(
 async def export_presentation(
     presentation_id: uuid.UUID,
     title: str,
-    export_as: Literal["pptx", "pdf"],
+    export_as: Literal["pptx", "pdf", "mp4"],
     cookie_header: str | None = None,
+    include_narration: bool = False,
+    voice: str = "alloy",
+    speaker_notes: list[str] | None = None,
 ) -> PresentationAndPath:
     log_memory(
         LOGGER,
@@ -56,13 +60,25 @@ async def export_presentation(
         presentation_id, cookie_header
     )
     name = (title or "").strip() or str(uuid.uuid4())
-    export_result = await EXPORT_TASK_SERVICE.export_from_url(
-        url=export_url,
-        title=safe_export_basename(sanitize_filename(name)),
-        export_as=export_as,
-        fastapi_url=fastapi_url,
-        cookie_header=cookie_header,
-    )
+
+    if export_as == "mp4":
+        export_result = await export_presentation_to_mp4(
+            presentation_id=presentation_id,
+            title=name,
+            cookie_header=cookie_header,
+            include_narration=include_narration,
+            voice=voice,
+            speaker_notes=speaker_notes,
+        )
+    else:
+        export_result = await EXPORT_TASK_SERVICE.export_from_url(
+            url=export_url,
+            title=safe_export_basename(sanitize_filename(name)),
+            export_as=export_as,
+            fastapi_url=fastapi_url,
+            cookie_header=cookie_header,
+        )
+
     log_memory(
         LOGGER,
         "presentation.export.finish",

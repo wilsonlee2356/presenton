@@ -12,6 +12,8 @@ import {
   Check,
   X,
   AlertTriangle,
+  Video,
+  Mic,
 } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
@@ -53,10 +55,10 @@ const MAX_EXPORT_TITLE_LENGTH = 40;
 
 const buildSafeExportFileName = (
   rawTitle: string | null | undefined,
-  extension: "pdf" | "pptx"
+  extension: "pdf" | "pptx" | "mp4"
 ) => {
   const normalizedTitle = (rawTitle || "presentation").trim();
-  const titleWithoutExtension = normalizedTitle.replace(/\.(pdf|pptx)$/i, "");
+  const titleWithoutExtension = normalizedTitle.replace(/\.(pdf|pptx|mp4)$/i, "");
 
   let safeBase = titleWithoutExtension
     // Replace all punctuation/special chars (including dots) with dashes
@@ -326,6 +328,72 @@ const PresentationHeader = ({
       setIsExporting(false);
     }
   };
+
+  const handleExportMp4 = async (includeNarration: boolean) => {
+    if (isStreaming) return;
+
+    let exportToastId: string | number | undefined;
+    try {
+      trackEvent(MixpanelEvent.Presentation_Export_Started, {
+        pathname,
+        presentation_id,
+        format: "mp4",
+        slide_count: presentationData?.slides?.length || 0,
+      });
+      exportToastId = notify.loading(
+        includeNarration ? "Exporting MP4 with narration" : "Exporting MP4",
+        "Your presentation video is being rendered. This may take a moment."
+      );
+      setIsExporting(true);
+      // Save the presentation data before exporting
+      await PresentationGenerationApi.updatePresentationContent(presentationData);
+      const safeMp4FileName = buildSafeExportFileName(
+        presentationData?.title,
+        "mp4"
+      );
+      const safeMp4Title = safeMp4FileName.replace(/\.mp4$/i, "");
+
+      const response = await fetch("/api/export-presentation", {
+        method: "POST",
+        body: JSON.stringify({
+          format: "mp4",
+          id: presentation_id,
+          title: safeMp4Title,
+          includeNarration,
+          voice: "alloy",
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = (await response.json()) as { error?: string };
+        throw new Error(errorBody.error || "Failed to export MP4");
+      }
+
+      const { path: mp4Path } = await response.json();
+      if (!mp4Path) {
+        throw new Error("No path returned from export");
+      }
+
+      downloadLink(mp4Path, safeMp4FileName);
+      notify.success(
+        "Export complete",
+        "Your MP4 video has been downloaded.",
+        { id: exportToastId }
+      );
+    } catch (error) {
+      console.error("MP4 export failed:", error);
+      notify.error(
+        "Export failed",
+        error instanceof Error
+          ? error.message
+          : "We are having trouble exporting your presentation video. Please try again.",
+        exportToastId !== undefined ? { id: exportToastId } : undefined
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const handleReGenerate = () => {
     setIsRegenerateConfirmOpen(false);
     dispatch(clearPresentationData());
@@ -379,6 +447,36 @@ const PresentationHeader = ({
         >
           PPTX
           <ArrowUpRight className="w-3.5 h-3.5" />
+        </Button>
+        <Button
+          onClick={() => {
+            handleExportMp4(false);
+            setOpen(false);
+          }}
+          variant="ghost"
+          disabled={isExporting}
+          className={`w-full flex px-0 justify-start text-xs text-black hover:bg-transparent  ${
+            mobile ? "bg-white py-6" : ""
+          }`}
+        >
+          <Video className="w-3.5 h-3.5 mr-2" />
+          MP4 (silent)
+          <ArrowUpRight className="w-3.5 h-3.5 ml-auto" />
+        </Button>
+        <Button
+          onClick={() => {
+            handleExportMp4(true);
+            setOpen(false);
+          }}
+          variant="ghost"
+          disabled={isExporting}
+          className={`w-full flex px-0 justify-start text-xs text-black hover:bg-transparent  ${
+            mobile ? "bg-white py-6" : ""
+          }`}
+        >
+          <Mic className="w-3.5 h-3.5 mr-2" />
+          MP4 + Narration
+          <ArrowUpRight className="w-3.5 h-3.5 ml-auto" />
         </Button>
       </div>
     </div>

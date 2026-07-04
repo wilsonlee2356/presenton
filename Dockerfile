@@ -93,7 +93,7 @@ ENV APP_DATA_DIRECTORY=/app_data \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 RUN set -eux; \
-    packages="ca-certificates curl nginx fontconfig imagemagick zstd chromium \
+    packages="ca-certificates curl nginx fontconfig imagemagick zstd chromium ffmpeg \
       findutils fonts-noto-core fonts-noto-extra fonts-noto-mono fonts-noto-cjk fonts-noto-color-emoji xdg-utils \
       libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
       libcairo2 libcups2t64 libdbus-1-3 libdrm2 libexpat1 libgbm1 \

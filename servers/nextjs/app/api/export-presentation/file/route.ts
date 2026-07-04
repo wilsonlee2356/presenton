@@ -8,6 +8,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".pdf": "application/pdf",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   ".zip": "application/zip",
+  ".mp4": "video/mp4",
 };
 
 function getExportsDirectory(): string {

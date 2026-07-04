@@ -33,7 +33,7 @@ Key top-level files:
 |-------|------------|
 | **Backend** | Python 3.11, FastAPI 0.116, Uvicorn, SQLModel, SQLAlchemy, Alembic |
 | **LLM / AI clients** | OpenAI SDK, Google GenAI, LiteLLM-compatible calls, Mem0 OSS, FastEmbed |
-| **Documents / export** | `python-pptx`, `pdfplumber`, Pillow, FontTools, `@llamaindex/liteparse`, bundled `presenton-export` runtime |
+| **Documents / export** | `python-pptx`, `pdfplumber`, Pillow, FontTools, `@llamaindex/liteparse`, bundled `presenton-export` runtime, FFmpeg (for MP4 video export) |
 | **Databases** | SQLite (`aiosqlite`), PostgreSQL (`asyncpg`/`psycopg`), MySQL (`aiomysql`) |
 | **MCP** | `fastmcp` auto-generated from `openai_spec.json` |
 | **Frontend** | Next.js 16.2.6, React 19.2.6, TypeScript 5, Tailwind CSS 3.4, Radix UI |
@@ -90,7 +90,7 @@ Key top-level files:
 - **AI generation pipeline** — upload/prompt → SSE outline generation → layout preparation → streamed slide generation.
 - **Editor & assets** — drag/reorder slide editor, chat-based editing, image/icon picker, theme/font management, image generation.
 - **Templates** — built-in themes under `app/presentation-templates/` plus a Custom Template Studio that compiles uploaded PPTX files into React layouts.
-- **Export** — PPTX/PDF generation via the bundled `presenton-export` runtime.
+- **Export** — PPTX/PDF generation via the bundled `presenton-export` runtime; MP4 video export via FFmpeg.
 - **Auth** — single admin account with session cookies + HTTP Basic fallback. Electron disables auth by default.
 
 ---
