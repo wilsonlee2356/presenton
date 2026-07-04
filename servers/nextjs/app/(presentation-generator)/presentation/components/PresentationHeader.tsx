@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Video,
   Mic,
+  FileText,
 } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
@@ -99,6 +100,10 @@ const PresentationHeader = ({
   const [open, setOpen] = useState(false);
   const router = useRouter();
   const [isExporting, setIsExporting] = useState(false);
+  const srtFileInputRef = useRef<HTMLInputElement | null>(null);
+  const chatterboxUrl = useSelector(
+    (state: RootState) => state.userConfig.llm_config.CHATTERBOX_URL
+  );
   const [themes, setThemes] = useState<Theme[]>([]);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isRegenerateConfirmOpen, setIsRegenerateConfirmOpen] = useState(false);
@@ -329,7 +334,15 @@ const PresentationHeader = ({
     }
   };
 
-  const handleExportMp4 = async (includeNarration: boolean) => {
+  const handleExportMp4 = async ({
+    includeNarration,
+    narrationSource = "speaker_notes",
+    srtContent,
+  }: {
+    includeNarration: boolean;
+    narrationSource?: "speaker_notes" | "srt";
+    srtContent?: string;
+  }) => {
     if (isStreaming) return;
 
     let exportToastId: string | number | undefined;
@@ -360,7 +373,9 @@ const PresentationHeader = ({
           id: presentation_id,
           title: safeMp4Title,
           includeNarration,
-          voice: "alloy",
+          narrationSource,
+          chatterboxUrl,
+          srtContent,
         }),
       });
 
@@ -392,6 +407,21 @@ const PresentationHeader = ({
     } finally {
       setIsExporting(false);
     }
+  };
+
+  const handleSrtFileSelect = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    handleExportMp4({
+      includeNarration: true,
+      narrationSource: "srt",
+      srtContent: text,
+    });
+    // Reset input so the same file can be selected again.
+    event.target.value = "";
   };
 
   const handleReGenerate = () => {
@@ -450,7 +480,7 @@ const PresentationHeader = ({
         </Button>
         <Button
           onClick={() => {
-            handleExportMp4(false);
+            handleExportMp4({ includeNarration: false });
             setOpen(false);
           }}
           variant="ghost"
@@ -465,7 +495,7 @@ const PresentationHeader = ({
         </Button>
         <Button
           onClick={() => {
-            handleExportMp4(true);
+            handleExportMp4({ includeNarration: true, narrationSource: "speaker_notes" });
             setOpen(false);
           }}
           variant="ghost"
@@ -478,6 +508,28 @@ const PresentationHeader = ({
           MP4 + Narration
           <ArrowUpRight className="w-3.5 h-3.5 ml-auto" />
         </Button>
+        <Button
+          onClick={() => {
+            srtFileInputRef.current?.click();
+            setOpen(false);
+          }}
+          variant="ghost"
+          disabled={isExporting}
+          className={`w-full flex px-0 justify-start text-xs text-black hover:bg-transparent  ${
+            mobile ? "bg-white py-6" : ""
+          }`}
+        >
+          <FileText className="w-3.5 h-3.5 mr-2" />
+          MP4 + SRT Narration
+          <ArrowUpRight className="w-3.5 h-3.5 ml-auto" />
+        </Button>
+        <input
+          ref={srtFileInputRef}
+          type="file"
+          accept=".srt"
+          className="hidden"
+          onChange={handleSrtFileSelect}
+        />
       </div>
     </div>
   );

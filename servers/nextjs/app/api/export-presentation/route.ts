@@ -36,7 +36,15 @@ async function readExportRequestBody(req: NextRequest): Promise<{
   id?: unknown;
   title?: unknown;
   includeNarration?: unknown;
-  voice?: unknown;
+  narrationSource?: unknown;
+  chatterboxUrl?: unknown;
+  voiceMode?: unknown;
+  predefinedVoiceId?: unknown;
+  referenceAudioFilename?: unknown;
+  outputFormat?: unknown;
+  speedFactor?: unknown;
+  language?: unknown;
+  srtContent?: unknown;
 }> {
   const rawBody = await req.text();
   if (!rawBody.trim()) {
@@ -53,7 +61,15 @@ async function readExportRequestBody(req: NextRequest): Promise<{
     id?: unknown;
     title?: unknown;
     includeNarration?: unknown;
-    voice?: unknown;
+    narrationSource?: unknown;
+    chatterboxUrl?: unknown;
+    voiceMode?: unknown;
+    predefinedVoiceId?: unknown;
+    referenceAudioFilename?: unknown;
+    outputFormat?: unknown;
+    speedFactor?: unknown;
+    language?: unknown;
+    srtContent?: unknown;
   };
 }
 
@@ -79,8 +95,18 @@ function buildExportDownloadUrl(outPath: string): string {
 async function exportViaFastApiMp4(
   id: string,
   cookieHeader: string,
-  includeNarration: boolean,
-  voice: string
+  options: {
+    includeNarration: boolean;
+    narrationSource: "speaker_notes" | "srt";
+    chatterboxUrl: string;
+    voiceMode: "predefined" | "clone";
+    predefinedVoiceId?: string;
+    referenceAudioFilename?: string;
+    outputFormat?: string;
+    speedFactor?: number;
+    language?: string;
+    srtContent?: string;
+  }
 ): Promise<{ path: string }> {
   const fastapiUrl = `${getFastApiBaseUrl()}/api/v1/ppt/presentation/${id}/export/mp4`;
 
@@ -91,8 +117,16 @@ async function exportViaFastApiMp4(
       Cookie: cookieHeader,
     },
     body: JSON.stringify({
-      include_narration: includeNarration,
-      voice,
+      include_narration: options.includeNarration,
+      narration_source: options.narrationSource,
+      chatterbox_url: options.chatterboxUrl,
+      voice_mode: options.voiceMode,
+      predefined_voice_id: options.predefinedVoiceId || null,
+      reference_audio_filename: options.referenceAudioFilename || null,
+      output_format: options.outputFormat || "wav",
+      speed_factor: options.speedFactor ?? null,
+      language: options.language || null,
+      srt_content: options.srtContent || null,
     }),
     cache: "no-store",
   });
@@ -158,13 +192,43 @@ export async function POST(req: NextRequest) {
     if (format === "mp4") {
       const includeNarration =
         typeof body.includeNarration === "boolean" ? body.includeNarration : true;
-      const voice = typeof body.voice === "string" ? body.voice : "alloy";
-      const { path: outPath } = await exportViaFastApiMp4(
-        id.trim(),
-        cookieHeader,
+      const narrationSource =
+        body.narrationSource === "srt" ? "srt" : "speaker_notes";
+      const chatterboxUrl =
+        typeof body.chatterboxUrl === "string" && body.chatterboxUrl.trim()
+          ? body.chatterboxUrl.trim()
+          : "http://127.0.0.1:8001";
+      const voiceMode =
+        body.voiceMode === "clone" ? "clone" : "predefined";
+      const predefinedVoiceId =
+        typeof body.predefinedVoiceId === "string"
+          ? body.predefinedVoiceId
+          : undefined;
+      const referenceAudioFilename =
+        typeof body.referenceAudioFilename === "string"
+          ? body.referenceAudioFilename
+          : undefined;
+      const outputFormat =
+        typeof body.outputFormat === "string" ? body.outputFormat : "wav";
+      const speedFactor =
+        typeof body.speedFactor === "number" ? body.speedFactor : undefined;
+      const language =
+        typeof body.language === "string" ? body.language : undefined;
+      const srtContent =
+        typeof body.srtContent === "string" ? body.srtContent : undefined;
+
+      const { path: outPath } = await exportViaFastApiMp4(id.trim(), cookieHeader, {
         includeNarration,
-        voice
-      );
+        narrationSource,
+        chatterboxUrl,
+        voiceMode,
+        predefinedVoiceId,
+        referenceAudioFilename,
+        outputFormat,
+        speedFactor,
+        language,
+        srtContent,
+      });
       return NextResponse.json({
         success: true,
         path: outPath,

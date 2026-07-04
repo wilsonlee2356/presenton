@@ -40,6 +40,7 @@ from services.mem0_presentation_memory_service import (
 from utils.dict_utils import deep_update
 from utils.export_utils import export_presentation
 from services.video_export_service import export_presentation_to_mp4
+from services.tts_service import TTSConfig
 from utils.llm_calls.generate_presentation_outlines import (
     generate_ppt_outline,
     get_messages as get_outline_messages,
@@ -253,14 +254,26 @@ async def export_presentation_mp4(
     )
     speaker_notes = [slide.speaker_note or "" for slide in slides_result]
 
+    tts_config = TTSConfig(
+        base_url=export_request.chatterbox_url,
+        voice_mode=export_request.voice_mode,
+        predefined_voice_id=export_request.predefined_voice_id,
+        reference_audio_filename=export_request.reference_audio_filename,
+        output_format=export_request.output_format,
+        speed_factor=export_request.speed_factor,
+        language=export_request.language,
+    )
+
     cookie_header = _build_export_cookie_header(request)
     return await export_presentation_to_mp4(
         presentation_id=id,
         title=presentation.title or "",
         cookie_header=cookie_header,
         include_narration=export_request.include_narration,
-        voice=export_request.voice,
+        narration_source=export_request.narration_source,
+        tts_config=tts_config,
         speaker_notes=speaker_notes,
+        srt_content=export_request.srt_content,
     )
 
 

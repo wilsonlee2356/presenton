@@ -4,17 +4,22 @@ import os
 import shutil
 import tempfile
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from pathvalidate import sanitize_filename
 
 from models.presentation_and_path import PresentationAndPath
 from services.export_task_service import EXPORT_TASK_SERVICE
-from services.tts_service import generate_speaker_note_clips
+from services.tts_service import (
+    TTSConfig,
+    generate_speaker_note_clips,
+    generate_srt_entry_clips,
+)
 from templates.fonts_and_slides_preview import render_pptx_slides_to_images
 from utils.filename_utils import safe_export_basename
-from utils.get_env import get_app_data_directory_env, get_openai_api_key_env
+from utils.get_env import get_app_data_directory_env
+from utils.srt_utils import parse_srt
 
 LOGGER = logging.getLogger(__name__)
 
@@ -172,7 +177,6 @@ async def _normalize_audio_segment(
             output_path,
         ]
     else:
-        # Audio is already as long as (or longer than) the slide; just truncate.
         cmd = [
             ffmpeg,
             "-y",
@@ -220,39 +224,94 @@ async def _concatenate_audio_segments(
     await _exec_ffmpeg(cmd)
 
 
-async def _build_narration_audio_track(
-    speaker_notes: list[str],
-    voice: str,
-    seconds_per_slide: float,
-) -> str | None:
+async def _build_srt_audio_track(
+    srt_entries: list[dict[str, Any]],
+    tts_clips: list[str | None],
+    total_duration_ms: float,
+) -> str:
     """
-    Build a single AAC audio track from speaker notes.
+    Build an AAC audio track from SRT entries placed at their timestamps.
 
-    Returns the path to the audio file, or None if narration cannot be built.
-    The caller is responsible for deleting the parent temporary directory.
+    A silent base track of ``total_duration_ms`` is mixed with each delayed clip.
     """
-    if not speaker_notes:
-        return None
+    if not srt_entries:
+        raise HTTPException(status_code=500, detail="No SRT entries to build audio from")
 
-    audio_temp_dir = tempfile.mkdtemp(prefix="presenton_audio_")
+    ffmpeg = await _which_ffmpeg()
+    temp_dir = tempfile.mkdtemp(prefix="presenton_srt_audio_")
+
     try:
-        tts_clips = await generate_speaker_note_clips(
-            speaker_notes, audio_temp_dir, voice=voice
-        )
+        # 1. Normalize each TTS clip to the SRT entry duration.
+        normalized_paths: list[str] = []
+        delays_ms: list[int] = []
+        for i, entry in enumerate(srt_entries):
+            duration_ms = max(0, entry.get("duration_ms", 0))
+            duration_s = duration_ms / 1000.0
+            segment_path = os.path.join(temp_dir, f"segment_{i:04d}.mp3")
+            await _normalize_audio_segment(tts_clips[i], segment_path, duration_s)
+            normalized_paths.append(segment_path)
+            delays_ms.append(int(entry.get("start_ms", 0)))
 
+        # 2. Build a silent base track spanning the whole timeline.
+        total_duration_s = total_duration_ms / 1000.0
+        base_path = os.path.join(temp_dir, "base.mp3")
+        await _generate_silent_audio_segment(base_path, total_duration_s)
+
+        # 3. Mix delayed clips onto the base track.
+        cmd = [ffmpeg, "-y", "-i", base_path]
+        for normalized_path in normalized_paths:
+            cmd += ["-i", normalized_path]
+
+        filter_parts: list[str] = []
+        for i in range(len(normalized_paths)):
+            delay = delays_ms[i]
+            filter_parts.append(
+                f"[{i + 1}:a]adelay=delays={delay}|{delay}:all=1[a{i}]"
+            )
+
+        mix_inputs = "".join(f"[a{i}]" for i in range(len(normalized_paths)))
+        filter_parts.append(f"[0:a]{mix_inputs}amix=inputs={len(normalized_paths) + 1}:duration=longest[outa]")
+        filter_complex = ";".join(filter_parts)
+
+        audio_track_path = os.path.join(temp_dir, "audio_track.aac")
+        cmd += [
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[outa]",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            audio_track_path,
+        ]
+        await _exec_ffmpeg(cmd)
+        return audio_track_path
+    except Exception:
+        await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
+        raise
+
+
+async def _build_speaker_note_audio_track(
+    speaker_notes: list[str],
+    tts_clips: list[str | None],
+    seconds_per_slide: float,
+) -> str:
+    """Build an AAC audio track by concatenating per-slide narration segments."""
+    temp_dir = tempfile.mkdtemp(prefix="presenton_notes_audio_")
+    try:
         segment_paths: list[str] = []
         for i, _ in enumerate(speaker_notes):
-            segment_path = os.path.join(audio_temp_dir, f"segment_{i:04d}.mp3")
+            segment_path = os.path.join(temp_dir, f"segment_{i:04d}.mp3")
             await _normalize_audio_segment(tts_clips[i], segment_path, seconds_per_slide)
             segment_paths.append(segment_path)
 
-        audio_track_path = os.path.join(audio_temp_dir, "audio_track.aac")
+        audio_track_path = os.path.join(temp_dir, "audio_track.aac")
         await _concatenate_audio_segments(segment_paths, audio_track_path)
         return audio_track_path
     except Exception:
-        LOGGER.exception("[video_export] failed to build narration audio track")
-        await asyncio.to_thread(shutil.rmtree, audio_temp_dir, ignore_errors=True)
-        return None
+        await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
+        raise
 
 
 async def _run_ffmpeg(
@@ -330,16 +389,18 @@ async def export_presentation_to_mp4(
     cookie_header: str | None = None,
     seconds_per_slide: float = DEFAULT_SECONDS_PER_SLIDE,
     include_narration: bool = True,
-    voice: str = "alloy",
+    narration_source: Literal["speaker_notes", "srt"] = "speaker_notes",
+    tts_config: TTSConfig | None = None,
     speaker_notes: list[str] | None = None,
+    srt_content: str | None = None,
 ) -> PresentationAndPath:
     """
-    Export a presentation as an MP4 slideshow, optionally with TTS narration.
+    Export a presentation as an MP4 slideshow, optionally with Chatterbox narration.
 
     Pipeline:
       1. Generate a PPTX using the existing bundled export runtime.
       2. Convert the PPTX to per-slide HTML and render each slide to a PNG.
-      3. Optionally build an AAC narration track from speaker notes.
+      3. Optionally build an AAC narration track via Chatterbox (speaker notes or SRT).
       4. Run FFmpeg to combine the PNGs (and audio) into an MP4.
     """
     # Local import to avoid a circular dependency with utils.export_utils.
@@ -352,10 +413,11 @@ async def export_presentation_to_mp4(
     safe_name = safe_export_basename(sanitize_filename(name))
 
     LOGGER.info(
-        "[video_export] starting mp4 export presentation_id=%s title=%s narration=%s",
+        "[video_export] starting mp4 export presentation_id=%s title=%s narration=%s source=%s",
         presentation_id,
         safe_name,
         include_narration,
+        narration_source,
     )
 
     # 1. Produce a PPTX so we can reuse the same rendering path as PDF/PPTX export.
@@ -393,27 +455,71 @@ async def export_presentation_to_mp4(
     # 3. Optionally build a narration audio track.
     audio_path: str | None = None
     audio_temp_dir: str | None = None
-    if include_narration and speaker_notes:
-        if not get_openai_api_key_env():
-            LOGGER.warning(
-                "[video_export] narration requested but OpenAI API key is not configured; "
-                "producing silent MP4"
+    effective_seconds_per_slide = seconds_per_slide
+    tts_config = tts_config or TTSConfig()
+
+    if include_narration and tts_config.base_url:
+        clip_temp_dir: str | None = None
+        try:
+            if narration_source == "srt" and srt_content:
+                srt_entries = parse_srt(srt_content)
+                if srt_entries:
+                    clip_temp_dir = tempfile.mkdtemp(prefix="presenton_srt_clips_")
+                    tts_clips = await generate_srt_entry_clips(
+                        srt_entries, clip_temp_dir, tts_config
+                    )
+                    video_duration_ms = len(image_paths) * seconds_per_slide * 1000
+                    last_end_ms = max(entry.get("end_ms", 0) for entry in srt_entries)
+                    total_duration_ms = max(video_duration_ms, last_end_ms)
+                    effective_seconds_per_slide = (
+                        total_duration_ms / 1000.0 / len(image_paths)
+                    )
+                    audio_track_path = await _build_srt_audio_track(
+                        srt_entries,
+                        tts_clips,
+                        total_duration_ms,
+                    )
+                    audio_path = audio_track_path
+                    audio_temp_dir = os.path.dirname(audio_track_path)
+                else:
+                    LOGGER.warning("[video_export] SRT content parsed to zero entries")
+            elif speaker_notes:
+                clip_temp_dir = tempfile.mkdtemp(prefix="presenton_notes_clips_")
+                tts_clips = await generate_speaker_note_clips(
+                    speaker_notes, clip_temp_dir, tts_config
+                )
+                audio_track_path = await _build_speaker_note_audio_track(
+                    speaker_notes,
+                    tts_clips,
+                    seconds_per_slide,
+                )
+                audio_path = audio_track_path
+                audio_temp_dir = os.path.dirname(audio_track_path)
+        except Exception:
+            LOGGER.exception(
+                "[video_export] failed to build narration audio; falling back to silent"
             )
-        else:
-            audio_path = await _build_narration_audio_track(
-                speaker_notes,
-                voice=voice,
-                seconds_per_slide=seconds_per_slide,
-            )
-            if audio_path:
-                audio_temp_dir = os.path.dirname(audio_path)
+            audio_path = None
+            if audio_temp_dir:
+                await asyncio.to_thread(
+                    shutil.rmtree, audio_temp_dir, ignore_errors=True
+                )
+                audio_temp_dir = None
+        finally:
+            if clip_temp_dir:
+                await asyncio.to_thread(
+                    shutil.rmtree, clip_temp_dir, ignore_errors=True
+                )
 
     # 4. Encode the PNG sequence (and optional audio) into an MP4.
     exports_dir = _ensure_exports_directory()
     output_path = os.path.join(exports_dir, f"{safe_name}.mp4")
     try:
         await _run_ffmpeg(
-            image_paths, output_path, seconds_per_slide, audio_path=audio_path
+            image_paths,
+            output_path,
+            effective_seconds_per_slide,
+            audio_path=audio_path,
         )
     finally:
         if audio_temp_dir:

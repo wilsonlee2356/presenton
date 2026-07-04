@@ -268,3 +268,72 @@ async def test_concatenate_audio_segments_joins_clips():
         duration = await _get_audio_duration(output)
         assert duration is not None
         assert abs(duration - 0.9) < 0.1
+
+
+async def _make_synthetic_mp3(path: str, duration_s: float) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg
+    await _exec_ffmpeg(
+        [
+            ffmpeg,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=1000:duration={duration_s}",
+            "-c:a",
+            "libmp3lame",
+            path,
+        ]
+    )
+
+
+@pytest.mark.anyio
+async def test_build_srt_audio_track_places_clips_at_timestamps():
+    from services.video_export_service import _build_srt_audio_track
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        entries = [
+            {"index": 1, "start_ms": 0, "end_ms": 1000, "duration_ms": 1000, "text": "A"},
+            {"index": 2, "start_ms": 2000, "end_ms": 3000, "duration_ms": 1000, "text": "B"},
+        ]
+        clips = [
+            os.path.join(temp_dir, "clip0.mp3"),
+            os.path.join(temp_dir, "clip1.mp3"),
+        ]
+        for clip in clips:
+            await _make_synthetic_mp3(clip, 0.8)
+
+        audio_track = await _build_srt_audio_track(entries, clips, total_duration_ms=3500)
+
+        assert os.path.isfile(audio_track)
+        duration = await _get_audio_duration(audio_track)
+        assert duration is not None
+        # The base track is 3.5 s; encoding may add a small MP3/AAC padding tail.
+        assert duration >= 3.4
+        assert duration <= 4.2
+
+
+@pytest.mark.anyio
+async def test_run_ffmpeg_with_srt_audio_produces_mp4_with_audio():
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        from services.video_export_service import _build_srt_audio_track
+
+        image_paths = _create_test_slides(temp_dir, count=1)
+        entries = [
+            {"index": 1, "start_ms": 0, "end_ms": 1000, "duration_ms": 1000, "text": "A"},
+        ]
+        clip = os.path.join(temp_dir, "clip.mp3")
+        await _make_synthetic_mp3(clip, 0.8)
+
+        audio_track = await _build_srt_audio_track(entries, [clip], total_duration_ms=1000)
+        output_path = os.path.join(temp_dir, "output_srt.mp4")
+        await _run_ffmpeg(image_paths, output_path, seconds_per_slide=1.0, fps=10, audio_path=audio_track)
+
+        assert os.path.isfile(output_path)
+        video_count, audio_count = _count_streams(output_path)
+        assert video_count == 1
+        assert audio_count == 1

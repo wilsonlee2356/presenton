@@ -10,6 +10,7 @@ from models.presentation_and_path import PresentationAndPath
 from utils.filename_utils import safe_export_basename
 from services.export_task_service import EXPORT_TASK_SERVICE
 from services.video_export_service import export_presentation_to_mp4
+from services.tts_service import TTSConfig
 from utils.runtime_limits import log_memory
 
 
@@ -47,8 +48,10 @@ async def export_presentation(
     export_as: Literal["pptx", "pdf", "mp4"],
     cookie_header: str | None = None,
     include_narration: bool = False,
-    voice: str = "alloy",
+    narration_source: str = "speaker_notes",
+    tts_config: TTSConfig | None = None,
     speaker_notes: list[str] | None = None,
+    srt_content: str | None = None,
 ) -> PresentationAndPath:
     log_memory(
         LOGGER,
@@ -67,8 +70,10 @@ async def export_presentation(
             title=name,
             cookie_header=cookie_header,
             include_narration=include_narration,
-            voice=voice,
+            narration_source=narration_source,
+            tts_config=tts_config,
             speaker_notes=speaker_notes,
+            srt_content=srt_content,
         )
     else:
         export_result = await EXPORT_TASK_SERVICE.export_from_url(
