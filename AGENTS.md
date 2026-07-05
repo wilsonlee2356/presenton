@@ -90,7 +90,7 @@ Key top-level files:
 - **AI generation pipeline** — upload/prompt → SSE outline generation → layout preparation → streamed slide generation.
 - **Editor & assets** — drag/reorder slide editor, chat-based editing, image/icon picker, theme/font management, image generation.
 - **Templates** — built-in themes under `app/presentation-templates/` plus a Custom Template Studio that compiles uploaded PPTX files into React layouts.
-- **Export** — PPTX/PDF generation via the bundled `presenton-export` runtime; MP4 video export via FFmpeg.
+- **Export** — PPTX/PDF generation via the bundled `presenton-export` runtime; MP4 video export via FFmpeg. MP4 exports with speaker-note narration now use dynamic per-slide durations based on the actual TTS audio length plus a short pause between slides, and the export UI lets users pick the Chatterbox voice, output format, speed, and language before exporting.
 - **Auth** — single admin account with session cookies + HTTP Basic fallback. Electron disables auth by default.
 
 ---

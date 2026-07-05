@@ -27,6 +27,11 @@ VIDEO_WIDTH = 1280
 VIDEO_HEIGHT = 720
 VIDEO_FPS = 30
 DEFAULT_SECONDS_PER_SLIDE = 5
+MIN_SECONDS_PER_SLIDE = 3.0
+MAX_SECONDS_PER_SLIDE = 60.0
+PAUSE_BETWEEN_SLIDES = 1.0
+WORDS_PER_SECOND = 2.5
+CHARS_PER_SECOND = 5.0
 
 
 class _SimpleLogger:
@@ -66,6 +71,27 @@ def _ensure_output_readable(output_path: str) -> None:
         os.chmod(output_path, 0o644)
     except OSError:
         LOGGER.warning("Could not set permissions on %s", output_path)
+
+
+def _estimate_speaker_note_duration(note: str) -> float:
+    """Estimate how long a speaker note should be shown, in seconds.
+
+    Uses the actual TTS clip duration when available. This fallback is used when
+    a clip is missing or its duration cannot be determined, based on word/character
+    count. The result is clamped between ``MIN_SECONDS_PER_SLIDE`` and
+    ``MAX_SECONDS_PER_SLIDE``.
+    """
+    text = (note or "").strip()
+    if not text:
+        return MIN_SECONDS_PER_SLIDE
+
+    if " " in text:
+        words = len(text.split())
+        duration = words / WORDS_PER_SECOND
+    else:
+        duration = len(text) / CHARS_PER_SECOND
+
+    return max(MIN_SECONDS_PER_SLIDE, min(MAX_SECONDS_PER_SLIDE, duration))
 
 
 async def _exec_ffmpeg(cmd: list[str]) -> None:
@@ -295,20 +321,43 @@ async def _build_srt_audio_track(
 async def _build_speaker_note_audio_track(
     speaker_notes: list[str],
     tts_clips: list[str | None],
-    seconds_per_slide: float,
-) -> str:
-    """Build an AAC audio track by concatenating per-slide narration segments."""
+    pause_between_slides: float = PAUSE_BETWEEN_SLIDES,
+    min_seconds_per_slide: float = MIN_SECONDS_PER_SLIDE,
+) -> tuple[str, list[float]]:
+    """Build an AAC audio track and compute per-slide video durations.
+
+    Each slide is shown for at least ``min_seconds_per_slide`` seconds plus the
+    duration of its narration clip. A ``pause_between_slides`` pause is appended
+    to every slide except the last one so the viewer has a moment to absorb the
+    slide before the next one appears.
+
+    Returns a tuple of (audio_track_path, slide_durations).
+    """
     temp_dir = tempfile.mkdtemp(prefix="presenton_notes_audio_")
     try:
         segment_paths: list[str] = []
-        for i, _ in enumerate(speaker_notes):
+        slide_durations: list[float] = []
+
+        for i, note in enumerate(speaker_notes):
+            clip_path = tts_clips[i]
+            actual_duration: float | None = None
+            if clip_path and os.path.isfile(clip_path):
+                actual_duration = await _get_audio_duration(clip_path)
+            if actual_duration is None or actual_duration <= 0:
+                actual_duration = _estimate_speaker_note_duration(note)
+
+            is_last_slide = i == len(speaker_notes) - 1
+            pause = 0.0 if is_last_slide else pause_between_slides
+            target_duration = max(actual_duration, min_seconds_per_slide) + pause
+
             segment_path = os.path.join(temp_dir, f"segment_{i:04d}.mp3")
-            await _normalize_audio_segment(tts_clips[i], segment_path, seconds_per_slide)
+            await _normalize_audio_segment(clip_path, segment_path, target_duration)
             segment_paths.append(segment_path)
+            slide_durations.append(target_duration)
 
         audio_track_path = os.path.join(temp_dir, "audio_track.aac")
         await _concatenate_audio_segments(segment_paths, audio_track_path)
-        return audio_track_path
+        return audio_track_path, slide_durations
     except Exception:
         await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
         raise
@@ -317,13 +366,34 @@ async def _build_speaker_note_audio_track(
 async def _run_ffmpeg(
     image_paths: list[str],
     output_path: str,
-    seconds_per_slide: float,
+    seconds_per_slide: float | None = None,
     fps: int = VIDEO_FPS,
     audio_path: str | None = None,
+    slide_durations: list[float] | None = None,
 ) -> None:
-    """Concatenate sequential PNGs into an H.264 MP4 using FFmpeg."""
+    """Concatenate sequential PNGs into an H.264 MP4 using FFmpeg.
+
+    Provide exactly one of ``seconds_per_slide`` (fixed duration for every slide)
+    or ``slide_durations`` (a list with one duration per slide for variable
+    timing).
+    """
     if not image_paths:
         raise HTTPException(status_code=400, detail="No slide images to encode")
+    if seconds_per_slide is None and slide_durations is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide seconds_per_slide or slide_durations",
+        )
+    if seconds_per_slide is not None and slide_durations is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot provide both seconds_per_slide and slide_durations",
+        )
+    if slide_durations is not None and len(image_paths) != len(slide_durations):
+        raise HTTPException(
+            status_code=400,
+            detail="slide_durations length must match image_paths length",
+        )
 
     ffmpeg = await _which_ffmpeg()
     temp_dir = tempfile.mkdtemp(prefix="presenton_video_")
@@ -333,17 +403,40 @@ async def _run_ffmpeg(
             dest_path = os.path.join(temp_dir, f"slide_{idx:04d}.png")
             await asyncio.to_thread(shutil.copy2, src_path, dest_path)
 
-        input_pattern = os.path.join(temp_dir, "slide_%04d.png")
-        frame_rate = f"1/{seconds_per_slide}"
+        if slide_durations is not None:
+            # Variable per-slide durations via the concat demuxer.
+            concat_list_path = os.path.join(temp_dir, "concat_list.txt")
+            with open(concat_list_path, "w", encoding="utf-8") as list_file:
+                for idx, duration in enumerate(slide_durations, start=1):
+                    slide_path = os.path.join(temp_dir, f"slide_{idx:04d}.png")
+                    list_file.write(f"file '{slide_path}'\n")
+                    list_file.write(f"duration {duration}\n")
+                # Final file entry without a duration tells FFmpeg where the stream ends.
+                list_file.write(
+                    f"file '{os.path.join(temp_dir, f'slide_{len(image_paths):04d}.png')}'\n"
+                )
 
-        cmd = [
-            ffmpeg,
-            "-y",
-            "-framerate",
-            frame_rate,
-            "-i",
-            input_pattern,
-        ]
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_list_path,
+            ]
+        else:
+            input_pattern = os.path.join(temp_dir, "slide_%04d.png")
+            frame_rate = f"1/{seconds_per_slide}"
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-framerate",
+                frame_rate,
+                "-i",
+                input_pattern,
+            ]
 
         if audio_path:
             cmd += ["-i", audio_path]
@@ -370,13 +463,21 @@ async def _run_ffmpeg(
 
         cmd += [output_path]
 
-        LOGGER.info(
-            "[video_export] encoding %s slides to %s (%.1fs each, audio=%s)",
-            len(image_paths),
-            output_path,
-            seconds_per_slide,
-            bool(audio_path),
-        )
+        if slide_durations is not None:
+            LOGGER.info(
+                "[video_export] encoding %s slides to %s (variable durations, audio=%s)",
+                len(image_paths),
+                output_path,
+                bool(audio_path),
+            )
+        else:
+            LOGGER.info(
+                "[video_export] encoding %s slides to %s (%.1fs each, audio=%s)",
+                len(image_paths),
+                output_path,
+                seconds_per_slide,
+                bool(audio_path),
+            )
         await _exec_ffmpeg(cmd)
         LOGGER.info("[video_export] FFmpeg finished successfully")
     finally:
@@ -455,6 +556,7 @@ async def export_presentation_to_mp4(
     # 3. Optionally build a narration audio track.
     audio_path: str | None = None
     audio_temp_dir: str | None = None
+    slide_durations: list[float] | None = None
     effective_seconds_per_slide = seconds_per_slide
     tts_config = tts_config or TTSConfig()
 
@@ -488,10 +590,9 @@ async def export_presentation_to_mp4(
                 tts_clips = await generate_speaker_note_clips(
                     speaker_notes, clip_temp_dir, tts_config
                 )
-                audio_track_path = await _build_speaker_note_audio_track(
+                audio_track_path, slide_durations = await _build_speaker_note_audio_track(
                     speaker_notes,
                     tts_clips,
-                    seconds_per_slide,
                 )
                 audio_path = audio_track_path
                 audio_temp_dir = os.path.dirname(audio_track_path)
@@ -515,12 +616,20 @@ async def export_presentation_to_mp4(
     exports_dir = _ensure_exports_directory()
     output_path = os.path.join(exports_dir, f"{safe_name}.mp4")
     try:
-        await _run_ffmpeg(
-            image_paths,
-            output_path,
-            effective_seconds_per_slide,
-            audio_path=audio_path,
-        )
+        if slide_durations is not None:
+            await _run_ffmpeg(
+                image_paths,
+                output_path,
+                slide_durations=slide_durations,
+                audio_path=audio_path,
+            )
+        else:
+            await _run_ffmpeg(
+                image_paths,
+                output_path,
+                effective_seconds_per_slide,
+                audio_path=audio_path,
+            )
     finally:
         if audio_temp_dir:
             await asyncio.to_thread(shutil.rmtree, audio_temp_dir, ignore_errors=True)

@@ -16,7 +16,7 @@ import {
   Mic,
   FileText,
 } from "lucide-react";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import {
   Popover,
@@ -45,7 +45,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import ThemeSelector from "./ThemeSelector";
+import { ChatterboxApi } from "../../services/api/chatterbox";
+import {
+  CustomTTSRequest,
+  OutputFormat,
+  PredefinedVoice,
+  VoiceMode,
+} from "../../services/api/chatterbox-types";
 import { DEFAULT_THEMES } from "../../(dashboard)/theme/components/ThemePanel/constants";
 import ThemeApi from "../../services/api/theme";
 import { Theme } from "../../services/api/types";
@@ -101,6 +117,7 @@ const PresentationHeader = ({
   const router = useRouter();
   const [isExporting, setIsExporting] = useState(false);
   const srtFileInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingVoiceOptionsRef = useRef<CustomTTSRequest | undefined>(undefined);
   const chatterboxUrl = useSelector(
     (state: RootState) => state.userConfig.llm_config.CHATTERBOX_URL
   );
@@ -111,6 +128,24 @@ const PresentationHeader = ({
   const titleInputRef = useRef<HTMLInputElement>(null);
   /** Avoid committing on blur when Save/Cancel was used (focus/click ordering) */
   const titleBlurIntentRef = useRef<"none" | "save" | "cancel">("none");
+
+  const [isVoiceDialogOpen, setIsVoiceDialogOpen] = useState(false);
+  const [pendingNarrationSource, setPendingNarrationSource] = useState<
+    "speaker_notes" | "srt"
+  >("speaker_notes");
+  const [predefinedVoices, setPredefinedVoices] = useState<PredefinedVoice[]>([]);
+  const [referenceFiles, setReferenceFiles] = useState<string[]>([]);
+  const [isLoadingVoices, setIsLoadingVoices] = useState(false);
+  const [ttsRequest, setTtsRequest] = useState<CustomTTSRequest>({
+    text: "",
+    voice_mode: "predefined",
+    predefined_voice_id: undefined,
+    reference_audio_filename: undefined,
+    output_format: "wav",
+    split_text: true,
+    chunk_size: 120,
+    stream: false,
+  });
 
   const pathname = usePathname();
   const dispatch = useDispatch();
@@ -132,6 +167,45 @@ const PresentationHeader = ({
       load();
     }
   }, []);
+
+  const isChatterboxConfigured = Boolean(chatterboxUrl?.trim());
+
+  const loadVoiceOptions = useCallback(async () => {
+    if (!isChatterboxConfigured) return;
+    setIsLoadingVoices(true);
+    try {
+      const [voices, files] = await Promise.all([
+        ChatterboxApi.getPredefinedVoices(),
+        ChatterboxApi.getReferenceFiles(),
+      ]);
+      setPredefinedVoices(voices);
+      setReferenceFiles(files);
+    } catch (e: any) {
+      notify.error(
+        "Could not load voices",
+        e?.message || "Failed to load Chatterbox voice options."
+      );
+    } finally {
+      setIsLoadingVoices(false);
+    }
+  }, [isChatterboxConfigured]);
+
+  useEffect(() => {
+    if (isVoiceDialogOpen) {
+      loadVoiceOptions();
+    }
+  }, [isVoiceDialogOpen, loadVoiceOptions]);
+
+  useEffect(() => {
+    // Reset voice selection when the configured Chatterbox server changes.
+    setPredefinedVoices([]);
+    setReferenceFiles([]);
+    setTtsRequest((prev) => ({
+      ...prev,
+      predefined_voice_id: undefined,
+      reference_audio_filename: undefined,
+    }));
+  }, [chatterboxUrl]);
 
   const { onUndo, onRedo, canUndo, canRedo } = usePresentationUndoRedo();
 
@@ -338,10 +412,12 @@ const PresentationHeader = ({
     includeNarration,
     narrationSource = "speaker_notes",
     srtContent,
+    voiceOptions,
   }: {
     includeNarration: boolean;
     narrationSource?: "speaker_notes" | "srt";
     srtContent?: string;
+    voiceOptions?: CustomTTSRequest;
   }) => {
     if (isStreaming) return;
 
@@ -375,6 +451,12 @@ const PresentationHeader = ({
           includeNarration,
           narrationSource,
           chatterboxUrl,
+          voiceMode: voiceOptions?.voice_mode || "predefined",
+          predefinedVoiceId: voiceOptions?.predefined_voice_id || null,
+          referenceAudioFilename: voiceOptions?.reference_audio_filename || null,
+          outputFormat: voiceOptions?.output_format || "wav",
+          speedFactor: voiceOptions?.speed_factor ?? null,
+          language: voiceOptions?.language || null,
           srtContent,
         }),
       });
@@ -419,7 +501,9 @@ const PresentationHeader = ({
       includeNarration: true,
       narrationSource: "srt",
       srtContent: text,
+      voiceOptions: pendingVoiceOptionsRef.current,
     });
+    pendingVoiceOptionsRef.current = undefined;
     // Reset input so the same file can be selected again.
     event.target.value = "";
   };
@@ -443,6 +527,30 @@ const PresentationHeader = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const updateTts = <K extends keyof CustomTTSRequest>(key: K, value: CustomTTSRequest[K]) => {
+    setTtsRequest((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const canExportWithVoice =
+    !isLoadingVoices &&
+    isChatterboxConfigured &&
+    (ttsRequest.voice_mode !== "predefined" || Boolean(ttsRequest.predefined_voice_id)) &&
+    (ttsRequest.voice_mode !== "clone" || Boolean(ttsRequest.reference_audio_filename));
+
+  const handleVoiceDialogExport = () => {
+    setIsVoiceDialogOpen(false);
+    if (pendingNarrationSource === "srt") {
+      pendingVoiceOptionsRef.current = ttsRequest;
+      srtFileInputRef.current?.click();
+    } else {
+      handleExportMp4({
+        includeNarration: true,
+        narrationSource: "speaker_notes",
+        voiceOptions: ttsRequest,
+      });
+    }
   };
 
   const ExportOptions = ({ mobile }: { mobile: boolean }) => (
@@ -495,7 +603,8 @@ const PresentationHeader = ({
         </Button>
         <Button
           onClick={() => {
-            handleExportMp4({ includeNarration: true, narrationSource: "speaker_notes" });
+            setPendingNarrationSource("speaker_notes");
+            setIsVoiceDialogOpen(true);
             setOpen(false);
           }}
           variant="ghost"
@@ -510,7 +619,8 @@ const PresentationHeader = ({
         </Button>
         <Button
           onClick={() => {
-            srtFileInputRef.current?.click();
+            setPendingNarrationSource("srt");
+            setIsVoiceDialogOpen(true);
             setOpen(false);
           }}
           variant="ghost"
@@ -618,6 +728,163 @@ const PresentationHeader = ({
 
   return (
     <>
+      <Dialog open={isVoiceDialogOpen} onOpenChange={setIsVoiceDialogOpen}>
+        <DialogContent className="w-[400px] rounded-2xl border-0 p-0 shadow-2xl sm:max-w-[400px]">
+          <DialogHeader className="px-6 pb-4 pt-6">
+            <DialogTitle className="text-lg font-semibold text-[#191919]">
+              Export MP4 with Narration
+            </DialogTitle>
+            <DialogDescription className="text-sm leading-relaxed text-gray-500">
+              Choose the voice and output settings for your narration.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="px-6 pb-2 space-y-4">
+            {!isChatterboxConfigured && (
+              <div className="rounded-[14px] border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                Chatterbox server URL is not configured. Set it in{" "}
+                <button
+                  type="button"
+                  onClick={() => router.push("/settings")}
+                  className="font-semibold underline"
+                >
+                  Settings
+                </button>{" "}
+                to generate narration.
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-[#191919]">Voice Mode</Label>
+              <Select
+                value={ttsRequest.voice_mode}
+                onValueChange={(value) => updateTts("voice_mode", value as VoiceMode)}
+                disabled={!isChatterboxConfigured}
+              >
+                <SelectTrigger className="rounded-[10px] border-[#EDEEEF]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="predefined">Predefined</SelectItem>
+                  <SelectItem value="clone">Clone</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {ttsRequest.voice_mode === "predefined" ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-[#191919]">Predefined Voice</Label>
+                <Select
+                  value={ttsRequest.predefined_voice_id || ""}
+                  onValueChange={(value) => updateTts("predefined_voice_id", value)}
+                  disabled={!isChatterboxConfigured || predefinedVoices.length === 0}
+                >
+                  <SelectTrigger className="rounded-[10px] border-[#EDEEEF]">
+                    <SelectValue placeholder="Select a voice" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {predefinedVoices.map((voice) => (
+                      <SelectItem key={voice.filename} value={voice.filename}>
+                        {voice.display_name || voice.filename}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-[#191919]">Reference Audio</Label>
+                <Select
+                  value={ttsRequest.reference_audio_filename || ""}
+                  onValueChange={(value) => updateTts("reference_audio_filename", value)}
+                  disabled={!isChatterboxConfigured || referenceFiles.length === 0}
+                >
+                  <SelectTrigger className="rounded-[10px] border-[#EDEEEF]">
+                    <SelectValue placeholder="Select reference audio" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {referenceFiles.map((file) => (
+                      <SelectItem key={file} value={file}>
+                        {file}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-[#191919]">Output Format</Label>
+              <Select
+                value={ttsRequest.output_format}
+                onValueChange={(value) => updateTts("output_format", value as OutputFormat)}
+                disabled={!isChatterboxConfigured}
+              >
+                <SelectTrigger className="rounded-[10px] border-[#EDEEEF]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="wav">WAV</SelectItem>
+                  <SelectItem value="opus">Opus</SelectItem>
+                  <SelectItem value="mp3">MP3</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-[#191919]">Speed Factor</Label>
+                <Input
+                  type="number"
+                  step={0.1}
+                  placeholder="1.0"
+                  value={ttsRequest.speed_factor ?? ""}
+                  onChange={(e) =>
+                    updateTts(
+                      "speed_factor",
+                      e.target.value === "" ? null : parseFloat(e.target.value)
+                    )
+                  }
+                  disabled={!isChatterboxConfigured}
+                  className="rounded-[10px] border-[#EDEEEF]"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-[#191919]">Language</Label>
+                <Input
+                  placeholder="auto"
+                  value={ttsRequest.language || ""}
+                  onChange={(e) => updateTts("language", e.target.value || null)}
+                  disabled={!isChatterboxConfigured}
+                  className="rounded-[10px] border-[#EDEEEF]"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="flex-row border-t border-gray-100 p-0 sm:space-x-0">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setIsVoiceDialogOpen(false)}
+              className="h-auto flex-1 rounded-none rounded-bl-2xl px-4 py-3.5 text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-700"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleVoiceDialogExport}
+              disabled={!canExportWithVoice}
+              className="h-auto flex-1 rounded-none rounded-br-2xl border-l border-gray-100 px-4 py-3.5 text-sm font-medium text-[#7C51F8] hover:bg-[#7C51F8]/5"
+            >
+              {isLoadingVoices ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : null}
+              Export
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="py-[18px] px-4 sticky top-0 bg-white z-50 shadow-sm font-syne flex justify-between items-center gap-4">
         <div className="flex items-center gap-3">
           <img

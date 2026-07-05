@@ -8,12 +8,16 @@ from PIL import Image
 
 from services.video_export_service import (
     _concatenate_audio_segments,
+    _estimate_speaker_note_duration,
     _generate_silent_audio_segment,
     _get_audio_duration,
     _normalize_audio_segment,
     _run_ffmpeg,
     _which_ffmpeg,
     _which_ffprobe,
+    MIN_SECONDS_PER_SLIDE,
+    MAX_SECONDS_PER_SLIDE,
+    PAUSE_BETWEEN_SLIDES,
 )
 
 
@@ -286,6 +290,144 @@ async def _make_synthetic_mp3(path: str, duration_s: float) -> None:
             path,
         ]
     )
+
+
+def _get_video_duration(mp4_path: str) -> float:
+    ffprobe = shutil.which("ffprobe")
+    assert ffprobe, "ffprobe is required"
+
+    import subprocess
+
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        mp4_path,
+    ]
+    output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+    return float(output.strip())
+
+
+@pytest.mark.anyio
+async def test_build_speaker_note_audio_track_returns_durations():
+    from services.video_export_service import _build_speaker_note_audio_track
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        notes = ["First note", "Second note with more words"]
+        clips = [
+            os.path.join(temp_dir, "clip0.mp3"),
+            os.path.join(temp_dir, "clip1.mp3"),
+        ]
+        await _make_synthetic_mp3(clips[0], 0.5)
+        await _make_synthetic_mp3(clips[1], 0.9)
+
+        audio_track, durations = await _build_speaker_note_audio_track(
+            notes, clips, pause_between_slides=0.25, min_seconds_per_slide=0.4
+        )
+
+        assert os.path.isfile(audio_track)
+        assert len(durations) == len(notes)
+        # First slide: max(0.5, 0.4) + 0.25 = 0.75
+        assert abs(durations[0] - 0.75) < 0.05
+        # Second (last) slide: max(0.9, 0.4) + 0 = 0.9
+        assert abs(durations[1] - 0.9) < 0.05
+
+        track_duration = await _get_audio_duration(audio_track)
+        assert track_duration is not None
+        assert abs(track_duration - sum(durations)) < 0.2
+
+
+@pytest.mark.anyio
+async def test_run_ffmpeg_with_variable_durations_produces_mp4():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        image_paths = _create_test_slides(temp_dir, count=2)
+        output_path = os.path.join(temp_dir, "output_variable.mp4")
+        slide_durations = [0.5, 1.2]
+        await _run_ffmpeg(
+            image_paths,
+            output_path,
+            slide_durations=slide_durations,
+            fps=10,
+        )
+
+        assert os.path.isfile(output_path)
+        assert os.path.getsize(output_path) > 0
+        video_count, audio_count = _count_streams(output_path)
+        assert video_count == 1
+        assert audio_count == 0
+        duration = _get_video_duration(output_path)
+        assert abs(duration - sum(slide_durations)) < 0.3
+
+
+@pytest.mark.anyio
+async def test_run_ffmpeg_with_variable_durations_and_audio():
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg, "ffmpeg is required"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        image_paths = _create_test_slides(temp_dir, count=2)
+        slide_durations = [0.6, 1.0]
+
+        audio_track = os.path.join(temp_dir, "audio.aac")
+        await _exec_ffmpeg(
+            [
+                ffmpeg,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=24000:cl=mono",
+                "-t",
+                str(sum(slide_durations)),
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                audio_track,
+            ]
+        )
+
+        output_path = os.path.join(temp_dir, "output_variable_audio.mp4")
+        await _run_ffmpeg(
+            image_paths,
+            output_path,
+            slide_durations=slide_durations,
+            fps=10,
+            audio_path=audio_track,
+        )
+
+        assert os.path.isfile(output_path)
+        video_count, audio_count = _count_streams(output_path)
+        assert video_count == 1
+        assert audio_count == 1
+
+
+def test_estimate_speaker_note_duration_uses_word_count():
+    # 10 words at 2.5 words/sec = 4 seconds, clamped to min of 3 -> 4
+    duration = _estimate_speaker_note_duration("one two three four five six seven eight nine ten")
+    assert abs(duration - 4.0) < 0.01
+    assert duration >= MIN_SECONDS_PER_SLIDE
+
+
+def test_estimate_speaker_note_duration_clamps_to_max():
+    long_note = "word " * 200  # 200 words -> 80 seconds, clamped to MAX
+    duration = _estimate_speaker_note_duration(long_note)
+    assert duration == MAX_SECONDS_PER_SLIDE
+
+
+def test_estimate_speaker_note_duration_empty_note():
+    assert _estimate_speaker_note_duration("") == MIN_SECONDS_PER_SLIDE
+    assert _estimate_speaker_note_duration("   ") == MIN_SECONDS_PER_SLIDE
+
+
+def test_estimate_speaker_note_duration_non_space_languages():
+    # CJK text without spaces uses character count.
+    duration = _estimate_speaker_note_duration("一二三四五六七八九十")
+    assert abs(duration - 10 / CHARS_PER_SECOND) < 0.01
 
 
 @pytest.mark.anyio
