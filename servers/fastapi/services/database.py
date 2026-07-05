@@ -11,6 +11,8 @@ from models.sql.async_presentation_generation_status import (
     AsyncPresentationGenerationTaskModel,
 )
 from models.sql.chat_history_message import ChatHistoryMessageModel
+from models.sql.video_project import VideoProjectModel
+from models.sql.video_render_job import VideoRenderJobModel
 from models.sql.image_asset import ImageAsset
 from models.sql.key_value import KeyValueSqlModel
 from models.sql.ollama_pull_status import OllamaPullStatus
@@ -61,6 +63,8 @@ async def create_db_and_tables():
                         WebhookSubscription.__table__,
                         AsyncPresentationGenerationTaskModel.__table__,
                         OllamaPullStatus.__table__,
+                        VideoProjectModel.__table__,
+                        VideoRenderJobModel.__table__,
                     ],
                 )
             )

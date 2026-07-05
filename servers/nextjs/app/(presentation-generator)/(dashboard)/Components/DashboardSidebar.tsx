@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { LayoutDashboard, Star, Brain, Settings, Palette, HelpCircle, Mic } from "lucide-react";
+import { LayoutDashboard, Star, Brain, Settings, Palette, HelpCircle, Mic, Video } from "lucide-react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 
@@ -101,6 +101,21 @@ const DashboardSidebar = () => {
                             <div className="flex flex-col cursor-pointer tex-center items-center gap-2  transition-colors">
                                 <Mic className={`h-4 w-4 ${pathname === "/chatterbox" ? "text-[#5146E5]" : "text-slate-600"}`} />
                                 <span className="text-[11px] text-slate-800">Chatterbox</span>
+                            </div>
+                        </Link>
+                        <Link
+                            prefetch={false}
+                            href={`/video-studio`}
+                            className={[
+                                "flex flex-col tex-center items-center gap-2  transition-colors",
+                                pathname === "/video-studio" ? "" : "ring-transparent",
+                            ].join(" ")}
+                            aria-label="Video Studio"
+                            title="Video Studio"
+                        >
+                            <div className="flex flex-col cursor-pointer tex-center items-center gap-2  transition-colors">
+                                <Video className={`h-4 w-4 ${pathname === "/video-studio" ? "text-[#5146E5]" : "text-slate-600"}`} />
+                                <span className="text-[11px] text-slate-800">Video</span>
                             </div>
                         </Link>
                     </div>

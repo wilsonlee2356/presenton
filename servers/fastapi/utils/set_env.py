@@ -317,6 +317,10 @@ def set_codex_model_env(value: str):
     os.environ["CODEX_MODEL"] = value
 
 
+def set_chatterbox_url_env(value: str):
+    os.environ["CHATTERBOX_URL"] = value
+
+
 # Open WebUI Image Provider
 def set_open_webui_image_url_env(value: str):
     os.environ["OPEN_WEBUI_IMAGE_URL"] = value

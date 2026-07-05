@@ -18,7 +18,8 @@ ENV APP_DATA_DIRECTORY=/app_data \
     PRESENTON_APP_ROOT=/app \
     HF_HOME=/root/.cache/huggingface \
     PRESENTON_FASTEMBED_ICON_CACHE_DIR=/root/.cache/presenton/fastembed-icons \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl unzip \

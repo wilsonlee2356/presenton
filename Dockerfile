@@ -90,7 +90,8 @@ ENV APP_DATA_DIRECTORY=/app_data \
     PATH="/opt/venv/bin:${PATH}" \
     NODE_ENV=production \
     START_OLLAMA=false \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 RUN set -eux; \
     packages="ca-certificates curl nginx fontconfig imagemagick zstd chromium ffmpeg \

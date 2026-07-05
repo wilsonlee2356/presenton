@@ -70,7 +70,7 @@ def test_upgrade_from_baseline_stamp_skips_existing_theme_column(tmp_path):
                 for row in connection.execute(text("PRAGMA table_info(presentations)"))
             }
 
-        assert version == "c7b70d0f31b1"
+        assert version == "a9da80da9051"
         assert "theme" in columns
     finally:
         engine.dispose()
@@ -120,7 +120,7 @@ def test_upgrade_from_theme_stamp_skips_existing_template_create_infos_table(tmp
                 )
             }
 
-        assert version == "c7b70d0f31b1"
+        assert version == "a9da80da9051"
         assert "template_create_infos" in tables
     finally:
         engine.dispose()
@@ -170,7 +170,7 @@ def test_upgrade_from_template_stamp_skips_existing_chat_history_table(tmp_path)
                 )
             }
 
-        assert version == "c7b70d0f31b1"
+        assert version == "a9da80da9051"
         assert {
             "ix_chat_history_messages_conversation_id",
             "ix_chat_history_messages_position",

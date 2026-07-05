@@ -78,6 +78,7 @@ from utils.get_env import (
     get_codex_email_env,
     get_codex_is_pro_env,
     get_codex_model_env,
+    get_chatterbox_url_env,
     get_open_webui_image_url_env,
     get_open_webui_image_api_key_env,
     get_openai_compat_image_base_url_env,
@@ -164,6 +165,7 @@ from utils.set_env import (
     set_codex_email_env,
     set_codex_is_pro_env,
     set_codex_model_env,
+    set_chatterbox_url_env,
     set_open_webui_image_url_env,
     set_open_webui_image_api_key_env,
     set_openai_compat_image_base_url_env,
@@ -304,6 +306,10 @@ def get_user_config():
             if existing_config.CODEX_IS_PRO is not None
             else parse_bool_or_none(get_codex_is_pro_env())
         ),
+        CHATTERBOX_URL=existing_config.CHATTERBOX_URL or get_chatterbox_url_env(),
+        YOUTUBE_ACCESS_TOKEN=existing_config.YOUTUBE_ACCESS_TOKEN,
+        YOUTUBE_REFRESH_TOKEN=existing_config.YOUTUBE_REFRESH_TOKEN,
+        YOUTUBE_TOKEN_EXPIRES=existing_config.YOUTUBE_TOKEN_EXPIRES,
         OPEN_WEBUI_IMAGE_URL=existing_config.OPEN_WEBUI_IMAGE_URL or get_open_webui_image_url_env(),
         OPEN_WEBUI_IMAGE_API_KEY=existing_config.OPEN_WEBUI_IMAGE_API_KEY or get_open_webui_image_api_key_env(),
         OPENAI_COMPAT_IMAGE_BASE_URL=existing_config.OPENAI_COMPAT_IMAGE_BASE_URL
@@ -471,6 +477,8 @@ def update_env_with_user_config():
         set_codex_email_env(user_config.CODEX_EMAIL)
     if user_config.CODEX_IS_PRO is not None:
         set_codex_is_pro_env(str(user_config.CODEX_IS_PRO))
+    if user_config.CHATTERBOX_URL:
+        set_chatterbox_url_env(user_config.CHATTERBOX_URL)
     if user_config.OPEN_WEBUI_IMAGE_URL:
         set_open_webui_image_url_env(user_config.OPEN_WEBUI_IMAGE_URL)
     if user_config.OPEN_WEBUI_IMAGE_API_KEY:

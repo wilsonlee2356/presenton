@@ -123,6 +123,9 @@ class UserConfig(BaseModel):
     BRAVE_SEARCH_API_KEY: Optional[str] = None
     SERPER_API_KEY: Optional[str] = None
 
+    # Chatterbox TTS
+    CHATTERBOX_URL: Optional[str] = None
+
     # Codex OAuth (ChatGPT)
     CODEX_MODEL: Optional[str] = None
     CODEX_ACCESS_TOKEN: Optional[str] = None
@@ -132,3 +135,7 @@ class UserConfig(BaseModel):
     CODEX_USERNAME: Optional[str] = None
     CODEX_EMAIL: Optional[str] = None
     CODEX_IS_PRO: Optional[bool] = None
+    # YouTube OAuth
+    YOUTUBE_ACCESS_TOKEN: Optional[str] = None
+    YOUTUBE_REFRESH_TOKEN: Optional[str] = None
+    YOUTUBE_TOKEN_EXPIRES: Optional[str] = None

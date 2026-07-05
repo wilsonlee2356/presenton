@@ -91,6 +91,7 @@ Key top-level files:
 - **Editor & assets** — drag/reorder slide editor, chat-based editing, image/icon picker, theme/font management, image generation.
 - **Templates** — built-in themes under `app/presentation-templates/` plus a Custom Template Studio that compiles uploaded PPTX files into React layouts.
 - **Export** — PPTX/PDF generation via the bundled `presenton-export` runtime; MP4 video export via FFmpeg. MP4 exports with speaker-note narration now use dynamic per-slide durations based on the actual TTS audio length plus a short pause between slides, and the export UI lets users pick the Chatterbox voice, output format, speed, and language before exporting.
+- **Video Studio** — HTML/CSS/JS animated videos rendered with Playwright + FFmpeg, with optional Chatterbox/SRT voiceover and optional YouTube upload via Google OAuth PKCE. Projects and render/upload jobs are tracked in `video_projects` and `video_render_jobs`.
 - **Auth** — single admin account with session cookies + HTTP Basic fallback. Electron disables auth by default.
 
 ---
@@ -394,6 +395,9 @@ Electron packages are produced by `electron/build.js` + `electron-builder`. Rele
 - Electron build config: `electron/build.js`
 - Runtime orchestrator: `start.js`
 - Export runtime sync: `scripts/sync-presentation-export.cjs` and `electron/scripts/sync-export-runtime.cjs`
+- Video Studio backend: `servers/fastapi/api/v1/video_studio/`, `servers/fastapi/services/video_studio_service.py`, `servers/fastapi/services/html_video_renderer.py`
+- Video Studio frontend: `servers/nextjs/app/(presentation-generator)/(dashboard)/video-studio/`
+- YouTube OAuth/upload: `servers/fastapi/utils/oauth/youtube.py`, `servers/fastapi/utils/youtube_config.py`, `servers/fastapi/services/youtube_upload_service.py`
 
 ### Known quirks
 
